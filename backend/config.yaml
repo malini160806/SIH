@@ -1,0 +1,71 @@
+# =====================================================================
+# FOGNET configuration
+#
+# Every tunable threshold used by the risk / fog / speed-advisory
+# engines lives here instead of being hard-coded in Python, so judges
+# or engineers can retune behaviour without touching code.
+# =====================================================================
+
+simulation:
+  tick_seconds: 0.4          # simulation + broadcast tick interval
+  telemetry_log_every: 5     # log a telemetry snapshot to SQLite every N ticks
+
+vehicles:
+  ids: ["DUMPER-01", "DUMPER-02", "DUMPER-03"]
+  default_target_speed_kmh: [22, 18, 25]
+  max_accel_mps2: 1.2        # comfortable acceleration limit
+  max_decel_mps2: 2.5        # comfortable braking limit
+  comm_range_m: 250          # V2V broadcast range
+
+sensors:
+  radar_range_m: 100
+  radar_noise_m: 0.5
+  radar_speed_noise_mps: 0.3
+  thermal_range_m: 70        # thermal keeps working reasonably well in fog
+  thermal_base_confidence: 92
+  gps_noise_m: 0.03          # RTK-grade accuracy
+  imu_noise: 0.05
+
+risk:
+  # Time-To-Collision thresholds (seconds). Below "red" is CRITICAL.
+  ttc_red_s: 4.0
+  ttc_orange_s: 8.0
+  ttc_yellow_s: 15.0
+  # If vehicles are not closing but are still very close, still caution.
+  caution_distance_m: 20
+  critical_distance_m: 8
+
+fog:
+  # visibility (metres) associated with each manual fog level
+  levels:
+    CLEAR: 200
+    LIGHT: 80
+    MEDIUM: 30
+    HEAVY: 12
+    EXTREME: 5
+  # metres of visibility lost per minute when auto-deterioration is enabled
+  deterioration_rate_m_per_min: 6
+  minimum_visibility_m: 3
+
+speed_advisor:
+  visibility_factor_kmh_per_m: 1.8   # recommended speed scales with visibility
+  zone_speed_multiplier:
+    straight: 1.0
+    curve: 0.55
+    intersection: 0.7
+    loading: 0.4
+    dumping: 0.4
+  traffic_density_penalty: 0.85      # applied when 2+ vehicles are nearby
+  min_recommended_kmh: 0
+  absolute_max_kmh: 30
+
+emergency:
+  sudden_stop_drop_kmh: 15
+  breakdown_stall_seconds: 6
+  comm_loss_timeout_s: 3
+  collision_distance_m: 3
+  road_edge_probability_per_tick: 0.0006
+
+fleet:
+  fog_zone_name: "Blind Curve / Fog Zone (Route A)"
+  bypass_route_name: "Perimeter Bypass (Route B)"

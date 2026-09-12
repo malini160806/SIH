@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>FOGNET Control Centre</title>
+<link rel="stylesheet" href="/static/css/style.css" />
+</head>
+<body>
+<header class="top-bar">
+  <div>
+    <h1>FOGNET CONTROL CENTRE</h1>
+    <div class="subtitle">AI-Based Cooperative Perception &amp; Haulage Safety Network</div>
+  </div>
+  <div class="controls">
+    <select id="fog-select">
+      <option value="CLEAR">Fog: Clear</option>
+      <option value="LIGHT">Fog: Light</option>
+      <option value="MEDIUM">Fog: Medium</option>
+      <option value="HEAVY">Fog: Heavy</option>
+      <option value="EXTREME">Fog: Extreme</option>
+    </select>
+    <button id="fog-auto-btn">Auto-Deteriorate: OFF</button>
+    <button id="demo-btn" class="demo-btn">▶ DEMO MODE</button>
+    <a href="/driver" target="_blank"><button>Open Driver View</button></a>
+  </div>
+</header>
+
+<main class="layout">
+  <section>
+    <div class="panel" id="twin-wrap">
+      <h2>Digital Twin — Mine Haul Loop</h2>
+      <canvas id="twin-canvas"></canvas>
+      <div class="demo-banner" id="demo-banner">
+        <span class="step-title" id="demo-step-title"></span>
+        <div id="demo-step-desc"></div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Fleet Vehicles</h2>
+      <table class="vehicle-table">
+        <thead><tr><th>Vehicle</th><th>Speed</th><th>Recommended</th><th>Zone</th><th>Status</th></tr></thead>
+        <tbody id="vehicle-rows"></tbody>
+      </table>
+    </div>
+
+    <div class="panel">
+      <h2>V2V Communication Log</h2>
+      <div class="msg-log" id="v2v-log"></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="panel">
+      <h2>Visibility &amp; Fog Status</h2>
+      <div class="big-readout">
+        <div>
+          <div class="value" id="visibility-value">--</div>
+          <div class="label">Current Visibility (m)</div>
+        </div>
+        <div>
+          <div class="value" id="fog-status-value">--</div>
+          <div class="label">Fog Status</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Collision Risk / TTC</h2>
+      <div id="risk-cards"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Sensor Fusion</h2>
+      <div id="fusion-cards"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Fleet Optimization</h2>
+      <div class="recommendation" id="fleet-recommendation">--</div>
+      <div class="route-row"><span id="route-a-name"></span><span id="route-a-risk"></span></div>
+      <div class="route-row"><span id="route-b-name"></span><span id="route-b-risk"></span></div>
+      <ul class="actions-list" id="fleet-actions"></ul>
+    </div>
+
+    <div class="panel">
+      <h2>Emergency Alerts</h2>
+      <div id="emergency-list"><div class="label">No active emergencies</div></div>
+    </div>
+  </section>
+</main>
+
+<footer class="status-bar">
+  <div><span id="conn-dot"></span><span id="conn-text">connecting...</span></div>
+  <div id="tick-info"></div>
+</footer>
+
+<script src="/static/js/ws.js"></script>
+<script src="/static/js/twin.js"></script>
+<script src="/static/js/control_room.js"></script>
+</body>
+</html>
