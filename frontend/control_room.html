@@ -21,7 +21,14 @@
       <option value="EXTREME">Fog: Extreme</option>
     </select>
     <button id="fog-auto-btn">Auto-Deteriorate: OFF</button>
-    <button id="demo-btn" class="demo-btn">▶ DEMO MODE</button>
+    <button id="demo-btn" class="demo-btn">&#9654; DEMO MODE</button>
+    <button id="demo-reset-btn" class="demo-btn">&#8635; RESET DEMO</button>
+    <button id="export-logs-btn" class="demo-btn">&#128229; Export Logs</button>
+    <div class="tick-rate-control">
+      <label for="tick-rate-slider">Demo speed:</label>
+      <input id="tick-rate-slider" type="range" min="0.05" max="2" step="0.05" value="0.1">
+      <span id="tick-rate-value">0.1&#8239;s/tick</span>
+    </div>
     <a href="/driver" target="_blank"><button>Open Driver View</button></a>
   </div>
 </header>
@@ -63,6 +70,23 @@
           <div class="value" id="fog-status-value">--</div>
           <div class="label">Fog Status</div>
         </div>
+      </div>
+    </div>
+    <div class="panel" id="vis-gauge-panel">
+      <h2>Visibility Gauge</h2>
+      <div class="vis-gauge-layout">
+        <canvas id="vis-gauge-canvas" width="260" height="160"></canvas>
+        <div class="vis-zone-bar">
+          <div class="vis-zone vis-zone-extreme"><span>EXTREME</span><span>&lt;30 m</span></div>
+          <div class="vis-zone vis-zone-heavy"><span>HEAVY</span><span>&lt;60 m</span></div>
+          <div class="vis-zone vis-zone-medium"><span>MEDIUM</span><span>&lt;100 m</span></div>
+          <div class="vis-zone vis-zone-light"><span>LIGHT</span><span>&lt;150 m</span></div>
+          <div class="vis-zone vis-zone-clear"><span>CLEAR</span><span>&gt;150 m</span></div>
+        </div>
+      </div>
+      <div class="vis-gauge-indicator" id="vis-gauge-indicator">
+        <span class="vis-gauge-dot" id="vis-gauge-dot"></span>
+        <span id="vis-gauge-label">-- m</span>
       </div>
     </div>
 

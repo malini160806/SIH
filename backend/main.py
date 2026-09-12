@@ -12,7 +12,9 @@ import asyncio
 import json
 import os
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query
+import fastapi
+
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -109,11 +111,55 @@ async def demo_start():
     engine.demo.start(engine)
     return {"ok": True}
 
+@app.post("/api/demo/reset")
+async def demo_reset():
+    """Reset demo: stop current demo and start fresh.
+    This clears any fog changes and restores vehicle targets.
+    """
+    engine.demo.stop(engine)
+    engine.demo.start(engine)
+    return {"ok": True}
+
 
 @app.post("/api/demo/stop")
 async def demo_stop():
     engine.demo.stop(engine)
     return {"ok": True}
+
+
+@app.get("/api/export-logs")
+async def export_logs(limit: int = 100, offset: int = 0):
+    """Return recent telemetry and event logs as a CSV file with pagination.
+    `limit` controls number of rows per section, `offset` skips rows from the most recent.
+    """
+    telemetry = db.fetch_recent_telemetry(limit, offset)
+    events = db.fetch_recent_events(limit, offset)
+    # Build CSV lines
+    lines = []
+    # Telemetry section
+    if telemetry:
+        telemetry_keys = telemetry[0].keys()
+        lines.append(",".join(telemetry_keys))
+        for row in telemetry:
+            lines.append(",".join(str(row[k]) for k in telemetry_keys))
+    # Separator
+    lines.append("")
+    # Events section
+    if events:
+        event_keys = events[0].keys()
+        lines.append(",".join(event_keys))
+        for row in events:
+            lines.append(",".join(str(row[k]) for k in event_keys))
+    csv_content = "\n".join(lines)
+    from fastapi.responses import Response
+    return Response(content=csv_content, media_type="text/csv", headers={"Content-Disposition": "attachment; filename=logs.csv"})
+
+
+@app.post("/api/simulation/tick_rate")
+async def set_tick_rate(rate: float = fastapi.Query(..., description="Seconds per simulation tick")):
+    """Adjust simulation tick duration (seconds per tick)."""
+    engine.dt = rate
+    return {"ok": True, "tick_rate": engine.dt}
 
 
 @app.post("/api/vehicle/{vehicle_id}/stall/{enabled}")

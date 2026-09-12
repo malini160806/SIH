@@ -1,0 +1,44 @@
+# FOGNET Project – Master Checklist
+
+## Overview
+This repository implements the **FOGNET** simulation platform for visualizing fog dynamics, vehicle interactions, and safety risk assessment in a mining environment. The web UI consists of a Control‑Room dashboard and a Driver view.
+
+## Completed Features
+- ✅ Visibility meter integrated into driver view (dynamic gauge with colour zones).
+- ✅ Demo control (start/stop/reset) with UI buttons.
+- ✅ Export logs endpoint (`/api/export-logs`) delivering telemetry and event CSV with pagination.
+- ✅ Visibility trend line chart (Chart.js) with threshold zones (DANGER / CAUTION annotations).
+- ✅ Demo speed control slider adjusting simulation tick rate via `/api/simulation/tick_rate`.
+- ✅ Refactored demo steps to JSON configuration (`demo_steps.json`).
+- ✅ Backend telemetry fetch (`fetch_recent_telemetry`) with pagination support.
+- ✅ UI enhancements: modern styling, premium dark theme, micro‑animations.
+- ✅ Optimized chart performance for long sessions (animation disabled, buffer capped).
+- ✅ Persistent user settings: tick rate saved in localStorage, restored on page load.
+- ✅ Enhanced Digital Twin: terrain grid, animated fog particles, glowing vehicles, sensor arcs, V2V pulse animations, zone icons with pill labels, live mini-legend overlay, fog status badge.
+- ✅ Enhanced Visibility Gauge: Replaced line chart with radial arc gauge, glowing segmented zone bar, animated needle, and large value readout.
+- ✅ Enhanced Driver View: speed gauge canvas (arc + needle), V2V message feed filtered per vehicle, zone/sensor info bar, labeled visibility meter, hover micro‑animations on tiles, gradient status backgrounds.
+- ✅ Fixed driver.js missing closing brace bug that was breaking the page.
+- ✅ Created Hackathon Pitch & Demonstration Guide (`hackathon_pitch_guide.md`).
+
+## Pending / Future Work
+- [ ] Add comprehensive unit tests for all API endpoints.
+- [ ] Deploy to staging environment.
+- [ ] Add persistent user settings for fog level preference.
+
+## Checklist
+- [x] Visibility meter on driver view
+- [x] Demo control UI (start, reset, stop)
+- [x] Export logs button and CSV endpoint
+- [x] Visibility trend chart (with threshold zones)
+- [x] Demo speed slider
+- [x] Backend tick‑rate API
+- [x] Refactor demo steps to JSON
+- [x] Updated documentation and README
+- [x] Optimize chart performance for long sessions
+- [x] Add persistent user settings (tick rate)
+- [x] Enhanced Digital Twin visuals (particles, glows, legend)
+- [x] Enhanced Visibility Gauge (radial arc, segmented bar)
+- [x] Enhanced Driver View (gauge, V2V feed, info bar)
+- [x] Create Hackathon Pitch & Demo Guide
+- [ ] Write comprehensive test suite
+- [ ] Deploy to staging environment
