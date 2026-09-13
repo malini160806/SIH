@@ -1,19 +1,11 @@
-"""
-Minimal SQLite persistence layer.
+'''Minimal SQLite persistence layer for FOGNET.'''
 
-Two tables:
-  telemetry - periodic vehicle snapshots (throttled, not every tick)
-  events    - emergency / hazard events for the control-room history view
-
-Kept as plain synchronous sqlite3 calls since write volume is low
-(a few rows per second at most) - no need for an async DB driver here.
-"""
 from __future__ import annotations
-
 import os
 import sqlite3
 import time
 
+# Database file location
 _DB_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "fognet.db")
 
 
@@ -80,10 +72,21 @@ def log_event(event: dict):
     conn.close()
 
 
-def fetch_recent_events(limit: int = 50) -> list[dict]:
+def fetch_recent_events(limit: int = 50, offset: int = 0) -> list[dict]:
     conn = get_connection()
     rows = conn.execute(
-        "SELECT * FROM events ORDER BY timestamp DESC LIMIT ?", (limit,)
+        "SELECT * FROM events ORDER BY timestamp DESC LIMIT ? OFFSET ?",
+        (limit, offset),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def fetch_recent_telemetry(limit: int = 50, offset: int = 0) -> list[dict]:
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT * FROM telemetry ORDER BY timestamp DESC LIMIT ? OFFSET ?",
+        (limit, offset),
     ).fetchall()
     conn.close()
     return [dict(r) for r in rows]

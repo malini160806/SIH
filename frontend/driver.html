@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>FOGNET Driver View</title>
+<link rel="stylesheet" href="/static/css/style.css" />
+</head>
+<body class="driver-body status-GREEN" id="driver-body">
+  <div class="driver-select">
+    <select id="vehicle-select">
+      <option value="DUMPER-01">DUMPER-01</option>
+      <option value="DUMPER-02">DUMPER-02</option>
+      <option value="DUMPER-03">DUMPER-03</option>
+    </select>
+  </div>
+
+  <div class="driver-panel">
+    <div class="driver-icon" id="driver-icon">✅</div>
+    <div class="driver-status" id="driver-status">SAFE</div>
+    <div class="driver-sub" id="driver-sub">Visibility: -- m</div>
+
+    <!-- Visibility meter bar -->
+    <div class="visibility-meter" id="visibility-meter">
+      <div class="meter-fill" id="visibility-fill"></div>
+      <div class="meter-labels">
+        <span>0 m</span><span>50 m</span><span>100 m</span><span>200 m</span>
+      </div>
+    </div>
+
+    <!-- Speed gauge canvas -->
+    <div class="driver-gauge-wrap">
+      <canvas id="speed-gauge" width="200" height="120"></canvas>
+    </div>
+
+    <div class="driver-grid">
+      <div class="driver-tile">
+        <div class="v" id="tile-speed">--</div>
+        <div class="l">Current Speed (km/h)</div>
+      </div>
+      <div class="driver-tile">
+        <div class="v" id="tile-recommended">--</div>
+        <div class="l">Recommended Speed (km/h)</div>
+      </div>
+      <div class="driver-tile">
+        <div class="v" id="tile-distance">--</div>
+        <div class="l">Distance to Vehicle Ahead (m)</div>
+      </div>
+      <div class="driver-tile">
+        <div class="v" id="tile-ttc">--</div>
+        <div class="l">Time To Collision (s)</div>
+      </div>
+    </div>
+
+    <!-- V2V message feed -->
+    <div class="driver-v2v-feed">
+      <div class="feed-title">V2V Messages</div>
+      <div class="feed-list" id="driver-v2v-list">
+        <div class="feed-empty">No messages</div>
+      </div>
+    </div>
+
+    <!-- Zone & sensor info bar -->
+    <div class="driver-info-bar">
+      <span id="driver-zone">Zone: --</span>
+      <span id="driver-sensors">Sensors: --</span>
+      <span id="driver-fog-status">Fog: --</span>
+    </div>
+  </div>
+
+<script src="/static/js/ws.js"></script>
+<script src="/static/js/driver.js"></script>
+</body>
+</html>

@@ -20,10 +20,21 @@ class FogController:
         self.zone_multipliers: dict[str, float] = cfg["zone_multipliers"]
 
         self._ordered = sorted(self.levels.items(), key=lambda kv: -kv[1])
-
+        # Initialize visibility state
         self.auto_mode = False
         self.visibility_m: float = self.levels["CLEAR"]
         self.elapsed_minutes = 0.0
+
+    def get_current_visibility(self) -> float:
+        """Return the current visibility distance in meters.
+
+        This helper provides a simple accessor for external callers that need
+        only the numeric visibility value without the additional status
+        information.
+        """
+        return self.visibility_m
+
+
 
     def set_level(self, level: str):
         level = level.upper()
