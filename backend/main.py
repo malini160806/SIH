@@ -81,6 +81,11 @@ async def control_room_page():
     return FileResponse(os.path.join(FRONTEND_DIR, "control_room.html"))
 
 
+@app.get("/driver")
+async def driver_page():
+    return FileResponse(os.path.join(FRONTEND_DIR, "driver.html"))
+
+
 # ---------------------------------------------------------------- API
 @app.get("/api/config")
 async def get_config():
