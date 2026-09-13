@@ -573,3 +573,173 @@ body.status-RED    { background: linear-gradient(160deg, #4a0f0f, #6e1414); colo
   0%, 100% { background: linear-gradient(160deg, #4a0f0f, #6e1414); }
   50% { background: linear-gradient(160deg, #6e1414, #a31d1d); }
 }
+
+/* ══════════════════════════════════════
+   RISK → ACTION PANEL
+══════════════════════════════════════ */
+
+/* Dual visibility readout */
+.vis-dual-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.vis-dual-card {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  padding: 8px 6px;
+}
+.vis-dual-icon { font-size: 18px; margin-bottom: 2px; }
+.vis-dual-val {
+  font-size: 22px;
+  font-weight: 700;
+  color: #2ecc71;
+  letter-spacing: 1px;
+}
+.vis-dual-val.fognet-val { color: #3fa9f5; }
+.vis-dual-lbl { font-size: 9px; color: var(--muted); margin-top: 2px; letter-spacing: 0.5px; }
+.vis-dual-sep { font-size: 20px; color: var(--muted); flex-shrink: 0; }
+.vis-gauge-wrap { margin-top: 4px; }
+
+/* Risk-action panel */
+.risk-action-panel { display: flex; flex-direction: column; gap: 10px; }
+
+.ra-risk-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-radius: 8px;
+  border: 1px solid rgba(100,140,180,0.2);
+  background: rgba(255,255,255,0.03);
+  transition: border-color 0.4s, background 0.4s;
+}
+.ra-risk-level {
+  font-size: 20px;
+  font-weight: 800;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  transition: color 0.4s;
+}
+.ra-ttc {
+  font-size: 16px;
+  font-weight: 700;
+  transition: color 0.4s;
+}
+
+/* Pulsing HIGH risk border */
+.risk-high-pulse {
+  animation: riskPulse 0.85s infinite;
+}
+@keyframes riskPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(231,76,60,0); }
+  50%       { box-shadow: 0 0 12px 3px rgba(231,76,60,0.3); }
+}
+
+/* WHY section */
+.ra-why { background: rgba(255,255,255,0.02); border-radius: 6px; padding: 8px 12px; }
+.ra-why-title { font-size: 9px; font-weight: 700; color: var(--muted); letter-spacing: 1.2px; margin-bottom: 5px; }
+.ra-why ul { margin: 0; padding-left: 14px; }
+.ra-why li { font-size: 11px; color: #9bb8cc; margin-bottom: 3px; }
+
+/* Recommendation */
+.ra-recommend {
+  background: rgba(255,255,255,0.03);
+  border-radius: 7px;
+  padding: 10px 14px;
+  border-left: 3px solid rgba(100,140,180,0.3);
+}
+.ra-recommend-label { font-size: 9px; color: var(--muted); font-weight: 700; letter-spacing: 1px; margin-bottom: 4px; }
+.ra-recommend-action {
+  font-size: 16px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  transition: color 0.4s;
+}
+
+/* Prediction rows */
+.ra-prediction { display: flex; flex-direction: column; gap: 4px; }
+.ra-pred-row {
+  font-size: 10px;
+  padding: 5px 10px;
+  border-radius: 5px;
+  background: rgba(231,76,60,0.08);
+  color: #e9a0a0;
+  border: 1px solid rgba(231,76,60,0.15);
+  display: none;
+}
+.ra-pred-row.safe-row {
+  background: rgba(46,204,113,0.08);
+  color: #8ee8b4;
+  border-color: rgba(46,204,113,0.15);
+}
+
+/* Apply button */
+.ra-apply-btn {
+  width: 100%;
+  padding: 12px;
+  background: linear-gradient(90deg, #7a1010, #e74c3c);
+  border: none;
+  border-radius: 8px;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 800;
+  letter-spacing: 1px;
+  cursor: pointer;
+  transition: transform 0.15s, box-shadow 0.3s;
+  animation: applyPulse 1.2s infinite;
+}
+.ra-apply-btn:hover {
+  transform: scale(1.02);
+  box-shadow: 0 0 16px rgba(231,76,60,0.5);
+}
+@keyframes applyPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(231,76,60,0); }
+  50%       { box-shadow: 0 0 10px 2px rgba(231,76,60,0.4); }
+}
+
+/* Outcome display */
+.ra-outcome {
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 10px;
+  border-radius: 8px;
+  background: rgba(0,0,0,0.2);
+  border: 1px solid rgba(255,255,255,0.06);
+}
+.ra-outcome-speed {
+  font-size: 18px;
+  font-weight: 800;
+  color: #f1c40f;
+  letter-spacing: 1px;
+}
+.ra-outcome-arrow { font-size: 20px; color: var(--muted); }
+.ra-outcome-result { font-size: 13px; font-weight: 700; }
+
+/* Fog forecast panel */
+.fog-forecast-panel { animation: slideIn 0.4s ease; }
+@keyframes slideIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.ff-warning {
+  font-size: 13px;
+  color: #e67e22;
+  background: rgba(230,126,34,0.08);
+  border: 1px solid rgba(230,126,34,0.2);
+  border-radius: 6px;
+  padding: 8px 12px;
+  margin-bottom: 10px;
+}
+.ff-ai-title { font-size: 9px; font-weight: 700; color: var(--muted); letter-spacing: 1.2px; margin-bottom: 6px; }
+.ff-actions { margin: 0; padding-left: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; }
+.ff-actions li { font-size: 11px; color: #9bb8cc; padding: 4px 8px; background: rgba(255,255,255,0.02); border-radius: 5px; }
+

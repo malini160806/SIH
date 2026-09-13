@@ -1,160 +1,385 @@
+/**
+ * control_room.js
+ * Drives the FOGNET Control Centre:
+ *   - WebSocket state rendering
+ *   - Visibility gauge
+ *   - RISK → ACTION panel with live demo state machine
+ *   - 12-step demo scenario (blind curve / hidden vehicle / TTC / resolution)
+ */
+
+/* ── canvas setup ── */
 const canvas = document.getElementById("twin-canvas");
-const ctx = initTwinCanvas(canvas);
+const ctx    = initTwinCanvas(canvas);
 
-/* ── Visibility Gauge (replaces line chart) ── */
-const MAX_VIS = 200;
+const connDot  = document.getElementById("conn-dot");
+const connText = document.getElementById("conn-text");
 
+/* ═══════════════════════════════════════════════════════════
+   DEMO STATE MACHINE
+   12 steps that play automatically when DEMO MODE is active.
+   Each step mutates _demoState which drives the right panel
+   and the map overlay in twin.js.
+═══════════════════════════════════════════════════════════ */
+const _demoState = {
+  active:         false,
+  step:           0,
+  stepStartedAt:  0,
+  visVisual:      200,   // driver's eye visibility
+  visVirtual:     200,   // FOGNET virtual visibility (via sensor fusion)
+  riskLevel:      "MONITORING",
+  ttc:            null,
+  speed:          22,
+  recommendedSpeed: 22,
+  whyReasons:     ["All vehicles clear", "Normal visibility"],
+  recommendAction:"— NORMAL OPERATIONS —",
+  predNoAction:   null,
+  predAction:     null,
+  showApply:      false,
+  actionTaken:    false,
+  outcome:        null,
+  showForecast:   false,
+  // Map overlay data (read by twin.js via window._fognetOverlay)
+  overlay: {
+    active:           false,
+    d01x: 0, d01y: 0,
+    d02x: 0, d02y: 0,
+    ttc:              null,
+    gap:              null,
+    riskLevel:        "MONITORING",
+    v2vPulse:         false,
+    hiddenVehicle:    false,
+    actionTaken:      false,
+  },
+};
+
+/* Expose overlay to twin.js */
+window._fognetOverlay = _demoState.overlay;
+
+/* Step durations in ms */
+const STEP_DUR = 2500;
+
+const DEMO_STEPS = [
+  // 0: baseline
+  {
+    vis: 200, visV: 400, risk: "MONITORING", ttc: null, speed: 22, recSpeed: 22,
+    why: ["Normal visibility","All vehicles clear","V2V active"],
+    rec: "— NORMAL OPERATIONS —", predNo: null, predYes: null,
+    showApply: false, overlay: { active: false },
+  },
+  // 1: fog starts
+  {
+    vis: 50, visV: 300, risk: "MONITORING", ttc: null, speed: 22, recSpeed: 22,
+    why: ["Fog forming — 50 m","V2V active","Monitoring DUMPER-01 route"],
+    rec: "⚠ Monitor curve approach",predNo: null, predYes: null,
+    showApply: false, overlay: { active: false },
+  },
+  // 2: fog heavier
+  {
+    vis: 20, visV: 200, risk: "LOW", ttc: null, speed: 22, recSpeed: 20,
+    why: ["Visibility: 20 m","Blind curve ahead","DUMPER-02 beyond curve"],
+    rec: "↓ Reduce speed to 20 km/h", predNo: null, predYes: null,
+    showApply: false, overlay: { active: true, hiddenVehicle: false, v2vPulse: false },
+  },
+  // 3: dense fog, DUMPER-02 hidden
+  {
+    vis: 8, visV: 75, risk: "MEDIUM", ttc: 6.2, speed: 22, recSpeed: 16,
+    why: ["Visibility: 8 m","Blind curve — DUMPER-02 hidden","FOGNET V2V detects DUMPER-02","Closing speed: 7.2 m/s"],
+    rec: "↓ Reduce speed to 16 km/h",
+    predNo: "If no action: TTC 6.2 s → 4.1 s → CRITICAL",
+    predYes: "If action taken: TTC 6.2 s → 8.0 s → SAFE",
+    showApply: true,
+    overlay: { active: true, hiddenVehicle: true, v2vPulse: true, gap: 55, ttc: 6.2, riskLevel: "MEDIUM" },
+  },
+  // 4: TTC decreasing
+  {
+    vis: 8, visV: 75, risk: "HIGH", ttc: 4.8, speed: 22, recSpeed: 12,
+    why: ["Visibility: 8 m","Blind curve","DUMPER-02 closing — 42 m","Relative speed: 7.2 m/s"],
+    rec: "↓ REDUCE SPEED TO 12 km/h",
+    predNo: "If no action: TTC 4.8 s → 3.1 s → CRITICAL",
+    predYes: "If action taken: TTC 4.8 s → 6.2 s → SAFE",
+    showApply: true,
+    overlay: { active: true, hiddenVehicle: true, v2vPulse: true, gap: 42, ttc: 4.8, riskLevel: "HIGH" },
+  },
+  // 5: critical threshold
+  {
+    vis: 8, visV: 75, risk: "HIGH", ttc: 4.1, speed: 22, recSpeed: 12,
+    why: ["Visibility: 8 m","DUMPER-02 — 38 m","TTC CRITICAL","FOGNET: BRAKE COMMAND"],
+    rec: "🛑 REDUCE SPEED TO 12 km/h — IMMEDIATE",
+    predNo: "If no action: COLLISION in 4.1 s",
+    predYes: "APPLY NOW → TTC will recover",
+    showApply: true,
+    overlay: { active: true, hiddenVehicle: true, v2vPulse: true, gap: 38, ttc: 4.1, riskLevel: "HIGH" },
+  },
+  // 6: action applied — speed starts dropping
+  {
+    vis: 8, visV: 75, risk: "MEDIUM", ttc: 5.0, speed: 18, recSpeed: 12,
+    why: ["Speed reducing: 22 → 18 km/h","FOGNET command applied","Monitoring TTC recovery"],
+    rec: "Slowing to 12 km/h...",
+    predNo: null, predYes: "TTC recovering → 5.0 s",
+    showApply: false, actionTaken: true,
+    outcome: { speed: "18 km/h", result: "Slowing..." },
+    overlay: { active: true, hiddenVehicle: true, v2vPulse: true, gap: 42, ttc: 5.0, riskLevel: "MEDIUM", actionTaken: true },
+  },
+  // 7: speed at 12, TTC recovering
+  {
+    vis: 8, visV: 75, risk: "LOW", ttc: 6.2, speed: 12, recSpeed: 12,
+    why: ["Speed: 12 km/h — target reached","TTC recovering","DUMPER-02 visible to FOGNET"],
+    rec: "✓ Maintain 12 km/h through curve",
+    predNo: null, predYes: "TTC 6.2 s — improving",
+    showApply: false, actionTaken: true,
+    outcome: { speed: "12 km/h", result: "TTC recovering ↑" },
+    overlay: { active: true, hiddenVehicle: false, v2vPulse: true, gap: 52, ttc: 6.2, riskLevel: "LOW", actionTaken: true },
+  },
+  // 8: SAFE
+  {
+    vis: 8, visV: 75, risk: "SAFE", ttc: 8.5, speed: 12, recSpeed: 12,
+    why: ["Speed: 12 km/h","TTC: 8.5 s — safe margin","Cooperative perception maintained"],
+    rec: "✓ RISK RESOLVED — Safe passage",
+    predNo: null, predYes: null,
+    showApply: false, actionTaken: true,
+    outcome: { speed: "12 km/h", result: "✓ SAFE" },
+    overlay: { active: true, hiddenVehicle: false, v2vPulse: true, gap: 62, ttc: 8.5, riskLevel: "SAFE", actionTaken: true },
+  },
+  // 9: Fog forecast + AI recommendation
+  {
+    vis: 8, visV: 75, risk: "SAFE", ttc: 8.5, speed: 12, recSpeed: 12,
+    why: ["Fog forecast: < 5 m in 10 min","AI routing analysis complete"],
+    rec: "AI FLEET RECOMMENDATION READY",
+    predNo: null, predYes: null,
+    showApply: false, showForecast: true,
+    overlay: { active: true, hiddenVehicle: false, v2vPulse: false, gap: 65, ttc: 8.5, riskLevel: "SAFE", actionTaken: true },
+  },
+];
+
+let _demoStepIndex = 0;
+let _demoTimer = null;
+let _demoRunning = false;
+let _actionApplied = false;
+
+function startDemoSequence() {
+  _demoRunning   = true;
+  _actionApplied = false;
+  _demoStepIndex = 0;
+  applyDemoStep(0);
+}
+
+function stopDemoSequence() {
+  _demoRunning = false;
+  clearTimeout(_demoTimer);
+  applyDemoStep(0); // reset to baseline
+}
+
+function applyDemoStep(idx) {
+  if (idx >= DEMO_STEPS.length) {
+    _demoRunning = false;
+    return;
+  }
+  _demoStepIndex = idx;
+  const step = DEMO_STEPS[idx];
+
+  // Update visibility readouts
+  document.getElementById("vis-visual").textContent  = step.vis  + " m";
+  document.getElementById("vis-virtual").textContent = step.visV + " m";
+
+  // Apply colour to virtual readout
+  const virtEl = document.getElementById("vis-virtual");
+  virtEl.className = "vis-dual-val fognet-val";
+  const visEl  = document.getElementById("vis-visual");
+  visEl.style.color = step.vis < 20 ? "#e74c3c" : step.vis < 60 ? "#e67e22" : "#2ecc71";
+
+  // Update risk panel
+  updateRiskPanel(step);
+
+  // Update map overlay
+  Object.assign(window._fognetOverlay, { active: false, hiddenVehicle: false, v2vPulse: false, actionTaken: false });
+  if (step.overlay) Object.assign(window._fognetOverlay, step.overlay);
+
+  // Forecast panel
+  const fpanel = document.getElementById("fog-forecast-panel");
+  if (step.showForecast) fpanel.style.display = "block";
+
+  // Draw gauge
+  drawVisGauge(step.vis, step.vis < 30 ? "EXTREME" : step.vis < 60 ? "HEAVY" : step.vis < 100 ? "MEDIUM" : step.vis < 150 ? "LIGHT" : "CLEAR");
+
+  // Schedule next step (unless waiting for user action at HIGH risk)
+  if (_demoRunning && idx < DEMO_STEPS.length - 1) {
+    const waitForAction = step.showApply && step.risk === "HIGH" && !_actionApplied;
+    if (!waitForAction) {
+      _demoTimer = setTimeout(() => applyDemoStep(idx + 1), STEP_DUR);
+    }
+  }
+}
+
+function updateRiskPanel(step) {
+  const riskColors = {
+    MONITORING: "#6088a0", LOW: "#9be15d", MEDIUM: "#f1c40f",
+    HIGH: "#e74c3c", SAFE: "#2ecc71",
+  };
+  const col = riskColors[step.risk] || "#6088a0";
+
+  // Header
+  const header = document.getElementById("ra-risk-header");
+  header.style.borderColor = col;
+  header.style.background  = col + "15";
+  document.getElementById("ra-risk-level").textContent = step.risk;
+  document.getElementById("ra-risk-level").style.color = col;
+  document.getElementById("ra-ttc").textContent = step.ttc ? `TTC: ${step.ttc} s` : "TTC: — s";
+  document.getElementById("ra-ttc").style.color = col;
+
+  // Flash panel on HIGH
+  const panel = document.getElementById("risk-action-panel");
+  panel.className = step.risk === "HIGH"
+    ? "panel risk-action-panel risk-high-pulse"
+    : "panel risk-action-panel";
+
+  // WHY list
+  const list = document.getElementById("ra-why-list");
+  list.innerHTML = (step.why || []).map(r => `<li>${r}</li>`).join("");
+
+  // Recommendation
+  document.getElementById("ra-recommend-action").textContent  = step.recommendAction || step.rec || "—";
+  document.getElementById("ra-recommend-action").style.color  = col;
+
+  // Prediction rows
+  const predNo  = document.getElementById("ra-pred-no-action");
+  const predYes = document.getElementById("ra-pred-action");
+  predNo.textContent  = step.predNo  || "";
+  predYes.textContent = step.predYes || "";
+  predNo.style.display  = step.predNo  ? "block" : "none";
+  predYes.style.display = step.predYes ? "block" : "none";
+
+  // Apply button
+  const applyBtn = document.getElementById("ra-apply-btn");
+  applyBtn.style.display = (step.showApply && !_actionApplied) ? "block" : "none";
+
+  // Outcome
+  const outcomeEl = document.getElementById("ra-outcome");
+  if (step.outcome) {
+    outcomeEl.style.display = "flex";
+    document.getElementById("ra-outcome-speed").textContent  = step.outcome.speed;
+    document.getElementById("ra-outcome-result").textContent = step.outcome.result;
+    document.getElementById("ra-outcome-result").style.color = col;
+  } else {
+    outcomeEl.style.display = "none";
+  }
+}
+
+/* Apply / Simulate button click */
+document.getElementById("ra-apply-btn").addEventListener("click", () => {
+  _actionApplied = true;
+  document.getElementById("ra-apply-btn").style.display = "none";
+
+  // Animate speed: 22 → 18 → 12
+  const steps = [
+    { label: "22 km/h → 18 km/h", delay: 0 },
+    { label: "18 km/h → 12 km/h", delay: 900 },
+    { label: "✓ 12 km/h reached", delay: 1800 },
+  ];
+  const speedEl  = document.getElementById("ra-outcome-speed");
+  const resultEl = document.getElementById("ra-outcome-result");
+  document.getElementById("ra-outcome").style.display = "flex";
+  steps.forEach(({ label, delay }) => {
+    setTimeout(() => { speedEl.textContent = label; }, delay);
+  });
+  setTimeout(() => {
+    resultEl.textContent = "TTC improving ↑";
+    resultEl.style.color = "#2ecc71";
+  }, 2000);
+
+  // Advance demo from step 6 onward
+  clearTimeout(_demoTimer);
+  setTimeout(() => { applyDemoStep(6); }, 2200);
+});
+
+/* ═══════════════════════════════════════════════════════════
+   VISIBILITY GAUGE (small, horizontal bar)
+═══════════════════════════════════════════════════════════ */
 function drawVisGauge(visibility, fogStatus) {
   const c = document.getElementById("vis-gauge-canvas");
   if (!c) return;
-  const g = c.getContext("2d");
-  const W = c.width;
-  const H = c.height;
+  const g  = c.getContext("2d");
+  const W  = c.width;
+  const H  = c.height;
   g.clearRect(0, 0, W, H);
 
-  const cx = W / 2;
-  const cy = H - 8;
-  const radius = 100;
-  const startAngle = Math.PI;
-  const endAngle = 0;
+  const MAX = 200;
+  const pct = Math.min(visibility / MAX, 1);
+  const barW = W - 24;
+  const barH = 14;
+  const bx   = 12;
+  const by   = H / 2 - barH / 2;
 
-  // background arc track
-  g.strokeStyle = "rgba(255,255,255,0.06)";
-  g.lineWidth = 20;
-  g.lineCap = "butt";
+  // Track
+  g.fillStyle = "rgba(255,255,255,0.06)";
   g.beginPath();
-  g.arc(cx, cy, radius, startAngle, endAngle);
-  g.stroke();
+  g.roundRect(bx, by, barW, barH, 7);
+  g.fill();
 
-  // coloured zone segments on the arc
+  // Zones
   const zones = [
-    { from: 0,    to: 0.15, color: "#e74c3c" },  // EXTREME  0-30m
-    { from: 0.15, to: 0.30, color: "#e67e22" },  // HEAVY    30-60m
-    { from: 0.30, to: 0.50, color: "#f1c40f" },  // MEDIUM   60-100m
-    { from: 0.50, to: 0.75, color: "#9be15d" },  // LIGHT    100-150m
-    { from: 0.75, to: 1.00, color: "#2ecc71" },  // CLEAR    150-200m
+    { to: 0.15, c: "#e74c3c" },
+    { to: 0.30, c: "#e67e22" },
+    { to: 0.50, c: "#f1c40f" },
+    { to: 0.75, c: "#9be15d" },
+    { to: 1.00, c: "#2ecc71" },
   ];
-  zones.forEach((z) => {
-    const a1 = startAngle + z.from * Math.PI;
-    const a2 = startAngle + z.to * Math.PI;
-    g.strokeStyle = z.color + "55"; // 33% alpha
-    g.lineWidth = 18;
+  let prev = 0;
+  zones.forEach(z => {
+    g.fillStyle = z.c + "44";
     g.beginPath();
-    g.arc(cx, cy, radius, a1, a2);
-    g.stroke();
+    g.roundRect(bx + prev * barW, by, (z.to - prev) * barW, barH, 0);
+    g.fill();
+    prev = z.to;
   });
 
-  // active arc up to current value
-  const pct = Math.min(visibility / MAX_VIS, 1);
-  const activeAngle = startAngle + pct * Math.PI;
+  // Active fill
+  let activeCol = "#2ecc71";
+  if (visibility < 30)  activeCol = "#e74c3c";
+  else if (visibility < 60)  activeCol = "#e67e22";
+  else if (visibility < 100) activeCol = "#f1c40f";
+  else if (visibility < 150) activeCol = "#9be15d";
 
-  // determine colour for current value
-  let activeColor = "#2ecc71";
-  if (visibility < 30) activeColor = "#e74c3c";
-  else if (visibility < 60) activeColor = "#e67e22";
-  else if (visibility < 100) activeColor = "#f1c40f";
-  else if (visibility < 150) activeColor = "#9be15d";
-
-  // bright arc
-  g.strokeStyle = activeColor;
-  g.lineWidth = 18;
-  g.lineCap = "round";
+  g.fillStyle = activeCol;
   g.beginPath();
-  g.arc(cx, cy, radius, startAngle, activeAngle);
-  g.stroke();
-
-  // glow behind active arc
-  g.strokeStyle = activeColor + "30";
-  g.lineWidth = 30;
-  g.beginPath();
-  g.arc(cx, cy, radius, startAngle, activeAngle);
-  g.stroke();
-
-  // needle
-  const nx = cx + (radius - 28) * Math.cos(activeAngle);
-  const ny = cy + (radius - 28) * Math.sin(activeAngle);
-  g.strokeStyle = "#d0dde8";
-  g.lineWidth = 2;
-  g.beginPath();
-  g.moveTo(cx, cy);
-  g.lineTo(nx, ny);
-  g.stroke();
-
-  // needle tip dot
-  const tx = cx + radius * Math.cos(activeAngle);
-  const ty = cy + radius * Math.sin(activeAngle);
-  g.fillStyle = activeColor;
-  g.beginPath();
-  g.arc(tx, ty, 5, 0, Math.PI * 2);
-  g.fill();
-  g.fillStyle = activeColor + "40";
-  g.beginPath();
-  g.arc(tx, ty, 10, 0, Math.PI * 2);
+  g.roundRect(bx, by, pct * barW, barH, 7);
   g.fill();
 
-  // center dot
-  g.fillStyle = "#d0dde8";
+  // Needle
+  const nx = bx + pct * barW;
+  g.fillStyle = "#fff";
   g.beginPath();
-  g.arc(cx, cy, 4, 0, Math.PI * 2);
+  g.arc(nx, by + barH / 2, 5, 0, Math.PI * 2);
   g.fill();
 
-  // value text
+  // Labels
   g.textAlign = "center";
-  g.fillStyle = activeColor;
-  g.font = "bold 28px Segoe UI";
-  g.fillText(visibility, cx, cy - 22);
-  g.fillStyle = "rgba(200,220,240,0.6)";
-  g.font = "11px Segoe UI";
-  g.fillText("metres", cx, cy - 8);
-
-  // scale labels
   g.font = "9px Segoe UI";
-  g.fillStyle = "rgba(200,220,240,0.35)";
-  g.fillText("0", cx - radius - 6, cy + 14);
-  g.fillText("200", cx + radius + 6, cy + 14);
-  g.fillText("100", cx, cy - radius + 6);
-  g.textAlign = "start";
-
-  // update zone indicator dot + label below
-  const dotEl = document.getElementById("vis-gauge-dot");
-  const labelEl = document.getElementById("vis-gauge-label");
-  if (dotEl) dotEl.style.backgroundColor = activeColor;
-  if (labelEl) {
-    labelEl.textContent = `${visibility} m — ${fogStatus}`;
-    labelEl.style.color = activeColor;
-  }
-
-  // highlight active zone in the bar
-  const statusMap = { CLEAR: "clear", LIGHT: "light", MEDIUM: "medium", HEAVY: "heavy", EXTREME: "extreme" };
-  const activeClass = statusMap[fogStatus] || "clear";
-  document.querySelectorAll(".vis-zone").forEach((el) => {
-    el.classList.remove("active");
+  g.fillStyle = "rgba(200,220,240,0.5)";
+  ["0", "50", "100", "150", "200"].forEach((lbl, i) => {
+    g.fillText(lbl, bx + (i * 0.25) * barW, by + barH + 14);
   });
-  const activeZone = document.querySelector(`.vis-zone-${activeClass}`);
-  if (activeZone) activeZone.classList.add("active");
+  // Value
+  g.font = "bold 11px Segoe UI";
+  g.fillStyle = activeCol;
+  g.fillText(visibility + " m", bx + pct * barW, by - 6);
+  g.textAlign = "start";
 }
 
-
-const connDot = document.getElementById("conn-dot");
-const connText = document.getElementById("conn-text");
-
-function fmtTime(ts) {
-  return new Date(ts * 1000).toLocaleTimeString();
-}
-
+/* ═══════════════════════════════════════════════════════════
+   WEBSOCKET STATE RENDERING
+═══════════════════════════════════════════════════════════ */
 function render(state) {
   drawTwin(ctx, state);
   renderVehicleTable(state);
-  renderFog(state);
-  renderRisk(state);
   renderFusion(state);
   renderV2VLog(state);
-  renderFleet(state);
-  renderEmergencies(state);
-  renderDemo(state);
 
-  // Update visibility gauge
-  drawVisGauge(state.fog.visibility_m, state.fog.status);
+  // If demo is NOT running, show live fog data in gauge
+  if (!_demoRunning) {
+    drawVisGauge(state.fog.visibility_m, state.fog.status);
+    document.getElementById("vis-visual").textContent  = state.fog.visibility_m + " m";
+    document.getElementById("vis-virtual").textContent = (state.fog.visibility_m * 2) + " m";
+  }
 
   document.getElementById("tick-info").textContent =
     `tick ${state.tick} · ${new Date(state.timestamp * 1000).toLocaleTimeString()}`;
@@ -168,7 +393,7 @@ function renderVehicleTable(state) {
   tbody.innerHTML = "";
   Object.values(state.vehicles).forEach((v) => {
     const rec = state.recommended_speed[v.id];
-    const tr = document.createElement("tr");
+    const tr  = document.createElement("tr");
     tr.innerHTML = `
       <td>${v.id}</td>
       <td>${v.speed_kmh} km/h</td>
@@ -180,45 +405,20 @@ function renderVehicleTable(state) {
   });
 }
 
-function renderFog(state) {
-  document.getElementById("visibility-value").textContent = `${state.fog.visibility_m} m`;
-  const statusEl = document.getElementById("fog-status-value");
-  statusEl.textContent = state.fog.status;
-  statusEl.className = `value fog-status-${state.fog.status}`;
-}
-
-function renderRisk(state) {
-  const container = document.getElementById("risk-cards");
-  container.innerHTML = "";
-  Object.entries(state.risk).forEach(([vid, r]) => {
-    if (!r.ahead_id) return;
-    const div = document.createElement("div");
-    div.className = "fusion-card";
-    const ttcText = r.ttc_s !== null ? `${r.ttc_s} s` : "not closing";
-    div.innerHTML = `
-      <b>${vid} ↔ ${r.ahead_id}</b> &nbsp; <span class="badge ${r.level}">${r.level}</span>
-      <div>Gap: ${r.gap_m} m &nbsp; TTC: ${ttcText}</div>
-    `;
-    container.appendChild(div);
-  });
-  if (!container.innerHTML) {
-    container.innerHTML = '<div class="label">All vehicles clear — no vehicle within sensor range.</div>';
-  }
-}
-
 function renderFusion(state) {
   const container = document.getElementById("fusion-cards");
+  if (!container) return;
   container.innerHTML = "";
-  Object.entries(state.fusion).forEach(([vid, f]) => {
+  Object.entries(state.fusion || {}).forEach(([vid, f]) => {
     const div = document.createElement("div");
     div.className = "fusion-card";
     const sensors = ["radar", "thermal", "v2v", "gps"];
     const tags = sensors
-      .map((s) => `<span class="${f.contributing_sensors.includes(s) ? "on" : ""}">${s.toUpperCase()}</span>`)
+      .map(s => `<span class="${f.contributing_sensors.includes(s) ? "on" : ""}">${s.toUpperCase()}</span>`)
       .join("");
     div.innerHTML = `
       <b>${vid}</b> ${f.detected ? `→ ${f.target_id} @ ${f.distance_m} m` : "(no detection)"}
-      &nbsp; <span class="conf-${f.confidence}">${f.confidence}</span>
+      &nbsp;<span class="conf-${f.confidence}">${f.confidence}</span>
       <div class="sensor-tags">${tags}</div>
     `;
     container.appendChild(div);
@@ -226,64 +426,15 @@ function renderFusion(state) {
 }
 
 function renderV2VLog(state) {
-  const log = document.getElementById("v2v-log");
+  const log  = document.getElementById("v2v-log");
   const msgs = state.v2v_messages || [];
   log.innerHTML = msgs
-    .map((m) => `<div class="msg"><b>${m.sender} → ${m.receiver}</b><br>"${m.text}"</div>`)
+    .map(m => `<div class="msg"><b>${m.sender} → ${m.receiver}</b><br>"${m.text}"</div>`)
     .join("") || '<div class="label">No V2V traffic in range.</div>';
 }
 
-function renderFleet(state) {
-  const fleet = state.fleet;
-  document.getElementById("fleet-recommendation").textContent = fleet.recommendation;
-  document.getElementById("route-a-name").textContent = fleet.route_a.name;
-  const a = document.getElementById("route-a-risk");
-  a.textContent = fleet.route_a.risk;
-  a.className = `route-risk-${fleet.route_a.risk}`;
-  document.getElementById("route-b-name").textContent = fleet.route_b.name;
-  const b = document.getElementById("route-b-risk");
-  b.textContent = fleet.route_b.risk;
-  b.className = `route-risk-${fleet.route_b.risk}`;
-  document.getElementById("fleet-actions").innerHTML = fleet.actions.map((a) => `<li>${a}</li>`).join("");
-}
-
-function renderEmergencies(state) {
-  const list = document.getElementById("emergency-list");
-  const events = state.emergency_events || [];
-  if (!events.length) {
-    list.innerHTML = '<div class="label">No active emergencies</div>';
-    return;
-  }
-  list.innerHTML = events
-    .slice(0, 8)
-    .map(
-      (e) => `
-      <div class="alert-banner">
-        <b>${e.type.replace("_", " ")} — ${e.vehicle_id}</b><br>
-        ${e.status} @ ${e.location} (${fmtTime(e.timestamp)})
-      </div>`
-    )
-    .join("");
-}
-
-function renderDemo(state) {
-  const banner = document.getElementById("demo-banner");
-  const demoBtn = document.getElementById("demo-btn");
-  if (state.demo && state.demo.active) {
-    banner.classList.add("show");
-    document.getElementById("demo-step-title").textContent =
-      `${state.demo.step_title} (${state.demo.step_index}/${state.demo.step_count})`;
-    document.getElementById("demo-step-desc").textContent = state.demo.step_description;
-    demoBtn.textContent = "■ STOP DEMO";
-    demoBtn.classList.add("active");
-  } else {
-    banner.classList.remove("show");
-    demoBtn.textContent = "▶ DEMO MODE";
-    demoBtn.classList.remove("active");
-  }
-}
-
-document.getElementById("fog-select").addEventListener("change", (e) => {
+/* ── Controls ── */
+document.getElementById("fog-select").addEventListener("change", e => {
   fetch(`/api/fog/${e.target.value}`, { method: "POST" });
 });
 
@@ -297,39 +448,55 @@ let demoActive = false;
 document.getElementById("demo-btn").addEventListener("click", () => {
   demoActive = !demoActive;
   fetch(`/api/demo/${demoActive ? "start" : "stop"}`, { method: "POST" });
+  if (demoActive) {
+    startDemoSequence();
+    document.getElementById("demo-btn").textContent = "■ STOP DEMO";
+    document.getElementById("demo-btn").classList.add("active");
+  } else {
+    stopDemoSequence();
+    document.getElementById("demo-btn").textContent = "▶ DEMO MODE";
+    document.getElementById("demo-btn").classList.remove("active");
+    document.getElementById("fog-forecast-panel").style.display = "none";
+  }
 });
 
-// Reset demo button
 const demoResetBtn = document.getElementById("demo-reset-btn");
 if (demoResetBtn) {
   demoResetBtn.addEventListener("click", () => {
     fetch(`/api/demo/reset`, { method: "POST" });
-    demoActive = true;
+    _actionApplied = false;
+    _demoRunning   = false;
+    clearTimeout(_demoTimer);
+    document.getElementById("fog-forecast-panel").style.display = "none";
+    if (demoActive) startDemoSequence();
   });
 }
 
-// Tick rate slider handling
-const tickSlider = document.getElementById("tick-rate-slider");
+document.getElementById("export-logs-btn")?.addEventListener("click", () => {
+  window.open("/api/export-logs", "_blank");
+});
+
+const tickSlider    = document.getElementById("tick-rate-slider");
 const tickValueSpan = document.getElementById("tick-rate-value");
 if (tickSlider) {
   const savedRate = localStorage.getItem("tickRate");
   if (savedRate) tickSlider.value = savedRate;
-  const sendRate = (rate) => {
+  const sendRate = rate => {
     fetch(`/api/simulation/tick_rate?rate=${rate}`, { method: "POST" })
       .then(() => {
         tickValueSpan.textContent = `${rate} s/tick`;
         localStorage.setItem("tickRate", rate);
-      })
-      .catch(console.error);
+      }).catch(console.error);
   };
-  tickSlider.addEventListener("input", (e) => {
-    sendRate(parseFloat(e.target.value));
-  });
+  tickSlider.addEventListener("input", e => sendRate(parseFloat(e.target.value)));
   sendRate(parseFloat(tickSlider.value));
 }
 
 connectFognetSocket(
   render,
-  () => { connDot.classList.add("connected"); connText.textContent = "connected"; },
-  () => { connDot.classList.remove("connected"); connText.textContent = "reconnecting..." }
+  () => { connDot.classList.add("connected");    connText.textContent = "connected"; },
+  () => { connDot.classList.remove("connected"); connText.textContent = "reconnecting..."; }
 );
+
+// Draw gauge with initial values
+drawVisGauge(200, "CLEAR");

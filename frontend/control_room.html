@@ -34,6 +34,7 @@
 </header>
 
 <main class="layout">
+  <!-- LEFT: Map + Fleet table + V2V log -->
   <section>
     <div class="panel" id="twin-wrap">
       <h2>Digital Twin — Mine Haul Loop</h2>
@@ -58,60 +59,90 @@
     </div>
   </section>
 
-  <section>
-    <div class="panel">
-      <h2>Visibility &amp; Fog Status</h2>
-      <div class="big-readout">
-        <div>
-          <div class="value" id="visibility-value">--</div>
-          <div class="label">Current Visibility (m)</div>
+  <!-- RIGHT: RISK → ACTION panel -->
+  <section id="right-panel">
+
+    <!-- TOP: Visibility dual readout -->
+    <div class="panel" id="vis-panel">
+      <h2>Visibility Status</h2>
+      <div class="vis-dual-row">
+        <div class="vis-dual-card eye">
+          <div class="vis-dual-icon">👁</div>
+          <div class="vis-dual-val" id="vis-visual">--</div>
+          <div class="vis-dual-lbl">Visual (Driver)</div>
         </div>
-        <div>
-          <div class="value" id="fog-status-value">--</div>
-          <div class="label">Fog Status</div>
-        </div>
-      </div>
-    </div>
-    <div class="panel" id="vis-gauge-panel">
-      <h2>Visibility Gauge</h2>
-      <div class="vis-gauge-layout">
-        <canvas id="vis-gauge-canvas" width="260" height="160"></canvas>
-        <div class="vis-zone-bar">
-          <div class="vis-zone vis-zone-extreme"><span>EXTREME</span><span>&lt;30 m</span></div>
-          <div class="vis-zone vis-zone-heavy"><span>HEAVY</span><span>&lt;60 m</span></div>
-          <div class="vis-zone vis-zone-medium"><span>MEDIUM</span><span>&lt;100 m</span></div>
-          <div class="vis-zone vis-zone-light"><span>LIGHT</span><span>&lt;150 m</span></div>
-          <div class="vis-zone vis-zone-clear"><span>CLEAR</span><span>&gt;150 m</span></div>
+        <div class="vis-dual-sep">→</div>
+        <div class="vis-dual-card fognet">
+          <div class="vis-dual-icon">📡</div>
+          <div class="vis-dual-val" id="vis-virtual">--</div>
+          <div class="vis-dual-lbl">Virtual (FOGNET)</div>
         </div>
       </div>
-      <div class="vis-gauge-indicator" id="vis-gauge-indicator">
-        <span class="vis-gauge-dot" id="vis-gauge-dot"></span>
-        <span id="vis-gauge-label">-- m</span>
+      <div class="vis-gauge-wrap">
+        <canvas id="vis-gauge-canvas" width="300" height="90"></canvas>
       </div>
     </div>
 
-    <div class="panel">
-      <h2>Collision Risk / TTC</h2>
-      <div id="risk-cards"></div>
+    <!-- RISK CARD -->
+    <div class="panel risk-action-panel" id="risk-action-panel">
+      <div class="ra-risk-header" id="ra-risk-header">
+        <div class="ra-risk-level" id="ra-risk-level">MONITORING</div>
+        <div class="ra-ttc" id="ra-ttc">TTC: — s</div>
+      </div>
+
+      <div class="ra-why" id="ra-why">
+        <div class="ra-why-title">SITUATION</div>
+        <ul id="ra-why-list">
+          <li>All vehicles clear</li>
+          <li>Normal visibility</li>
+        </ul>
+      </div>
+
+      <div class="ra-recommend" id="ra-recommend">
+        <div class="ra-recommend-label">FOGNET RECOMMENDATION</div>
+        <div class="ra-recommend-action" id="ra-recommend-action">— NORMAL OPERATIONS —</div>
+      </div>
+
+      <!-- Prediction flow -->
+      <div class="ra-prediction" id="ra-prediction">
+        <div class="ra-pred-row" id="ra-pred-no-action"></div>
+        <div class="ra-pred-row safe-row" id="ra-pred-action"></div>
+      </div>
+
+      <!-- Apply button -->
+      <button class="ra-apply-btn" id="ra-apply-btn" style="display:none;">
+        ⚡ APPLY / SIMULATE RESPONSE
+      </button>
+
+      <!-- Post-action outcome -->
+      <div class="ra-outcome" id="ra-outcome" style="display:none;">
+        <div class="ra-outcome-speed" id="ra-outcome-speed">22 km/h</div>
+        <div class="ra-outcome-arrow">↓</div>
+        <div class="ra-outcome-result" id="ra-outcome-result">Slowing...</div>
+      </div>
     </div>
 
+    <!-- Fog forecast (appears at end of demo) -->
+    <div class="panel fog-forecast-panel" id="fog-forecast-panel" style="display:none;">
+      <h2>⛈ Fog Forecast</h2>
+      <div class="ff-warning">Visibility expected <strong>&lt; 5 m</strong> in 10 min</div>
+      <div class="ff-ai-title">AI RECOMMENDATION</div>
+      <ul class="ff-actions">
+        <li>🔴 Hold 2 vehicles at Loading Area</li>
+        <li>🟡 Redirect DUMPER-03 to Route B</li>
+        <li>🟢 Maintain safe ore flow on Route C</li>
+      </ul>
+      <button class="ra-apply-btn" style="background:linear-gradient(90deg,#1a4a22,#2a7a3a);" onclick="document.getElementById('fog-forecast-panel').style.display='none'">
+        ✓ ACCEPT &amp; APPLY
+      </button>
+    </div>
+
+    <!-- Sensor Fusion (compact) -->
     <div class="panel">
       <h2>Sensor Fusion</h2>
       <div id="fusion-cards"></div>
     </div>
 
-    <div class="panel">
-      <h2>Fleet Optimization</h2>
-      <div class="recommendation" id="fleet-recommendation">--</div>
-      <div class="route-row"><span id="route-a-name"></span><span id="route-a-risk"></span></div>
-      <div class="route-row"><span id="route-b-name"></span><span id="route-b-risk"></span></div>
-      <ul class="actions-list" id="fleet-actions"></ul>
-    </div>
-
-    <div class="panel">
-      <h2>Emergency Alerts</h2>
-      <div id="emergency-list"><div class="label">No active emergencies</div></div>
-    </div>
   </section>
 </main>
 
