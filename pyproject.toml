@@ -1,2 +1,12 @@
+[project]
+name = "fognet"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi==0.115.0",
+    "uvicorn[standard]==0.30.6",
+    "pyyaml==6.0.2",
+]
+
 [tool.vercel]
 entrypoint = "backend.main:app"
