@@ -1,71 +1,154 @@
 # =====================================================================
 # FOGNET configuration
 #
-# Every tunable threshold used by the risk / fog / speed-advisory
-# engines lives here instead of being hard-coded in Python, so judges
-# or engineers can retune behaviour without touching code.
+# Every tunable threshold used by the road-geometry, risk, fog, and
+# speed-advisory engines lives here instead of being hard-coded in
+# Python, so judges or engineers can retune behaviour without touching
+# code.
 # =====================================================================
 
 simulation:
   tick_seconds: 0.4          # simulation + broadcast tick interval
   telemetry_log_every: 5     # log a telemetry snapshot to SQLite every N ticks
 
+# ---------------------------------------------------------------------
+# Spiral open-pit road geometry. The haul road is a single continuous
+# Archimedean spiral descending from the surface rim to the pit floor —
+# this is what gives the mine real depth (multiple stepped benches)
+# instead of one flat loop.
+# ---------------------------------------------------------------------
+mine:
+  center_x: 430
+  center_y: 350
+  outer_radius_m: 300
+  inner_radius_m: 40
+  turns: 5                      # number of full loops surface -> pit
+  elevation_surface_m: 520
+  elevation_pit_m: 420
+  bench_names: ["Surface", "B1", "B2", "B3", "B4", "Pit"]
+  # theta windows (radians, 0 = outer/surface end) for named zones.
+  # theta_max = turns * 2*pi ~= 31.416
+  dumping_window: [0.0, 0.4]
+  loading_window_from_end: 0.4       # last 0.4 rad before theta_max
+  # theta values below are deliberately spaced so that, projected onto a
+  # single compass angle (theta mod 2*pi), no two labelled features land
+  # close together — otherwise two features on different rings but at
+  # the same angle stack their map labels on top of each other.
+  blind_curve_center: 17.8           # ~2.83 turns in — the flagship blind-curve demo location
+  blind_curve_half_width: 0.34
+  intersection_theta: 22.0           # ~3.5 turns in
+  ramp_node_theta: 7.5                # ~1.2 turns in, for a V2I "ramp" node
+  gps_denied_window: [25.2, 25.9]    # deep bench / rock-wall shadow
+  # Sharp bends: local geometric kinks added on top of the smooth spiral,
+  # so curvature genuinely spikes at these points instead of changing
+  # only gradually. amplitude_m > 0 bulges the road outward (a wider
+  # switchback loop), < 0 pulls it inward (a tighter hairpin). Every
+  # vehicle travels this same single spiral road in both directions, so
+  # every bend here is part of every truck's normal haul cycle — none
+  # of these are decorative side-roads.
+  #
+  # zone_type drives the physics (speed cap / fog multiplier), kind
+  # drives which icon/label the digital twin uses, name is the
+  # judge-facing label, notable=false merges paired bends (an S-curve)
+  # into a single on-map tag instead of cluttering the map with two.
+  sharp_bends:
+    # the flagship blind curve — bench wall blocks direct line of sight
+    - {theta_center: 17.8, amplitude_m: 22, half_width: 0.34, zone_type: blind_curve,
+       kind: blind, name: "Blind Curve", notable: true}
+    # a second blind bend later in the cycle, tucked behind a bench wall
+    - {theta_center: 29.0, amplitude_m: -15, half_width: 0.20, zone_type: blind_curve,
+       kind: blind, name: "Blind Curve (Bench Wall)", notable: true}
+    # a wide hairpin switchback on the outer bench
+    - {theta_center: 5.0, amplitude_m: 18, half_width: 0.22, zone_type: sharp_curve,
+       kind: hairpin, name: "Hairpin Bend", notable: true}
+    # the tightest curve in the mine — right where the ramp descends to the next bench
+    - {theta_center: 7.5, amplitude_m: -20, half_width: 0.14, zone_type: sharp_curve,
+       kind: tight_90, name: "Tight Bend (Ramp)", notable: true}
+    # an S-curve just before the intersection: two opposed kinks back to back
+    - {theta_center: 20.6, amplitude_m: 11, half_width: 0.16, zone_type: sharp_curve,
+       kind: s_curve, name: "S-Curve Entry", notable: false}
+    - {theta_center: 21.15, amplitude_m: -11, half_width: 0.16, zone_type: sharp_curve,
+       kind: s_curve, name: "S-Curve Exit", notable: false}
+    # the sharpest hairpin in the mine, deep near the pit floor
+    - {theta_center: 27.3, amplitude_m: -16, half_width: 0.18, zone_type: sharp_curve,
+       kind: high_risk, name: "High-Risk Curve", notable: true}
+
 vehicles:
-  ids: ["DUMPER-01", "DUMPER-02", "DUMPER-03"]
-  default_target_speed_kmh: [22, 18, 25]
-  max_accel_mps2: 1.2        # comfortable acceleration limit
-  max_decel_mps2: 2.5        # comfortable braking limit
-  comm_range_m: 250          # V2V broadcast range
+  ids: ["DUMPER-01", "DUMPER-02", "DUMPER-03", "DUMPER-04", "DUMPER-05"]
+  max_accel_mps2: 1.1
+  max_decel_mps2: 2.2
+  comm_range_m: 220           # V2V broadcast range
+  v2i_range_m: 150            # range to connect to a roadside V2I node
 
 sensors:
-  radar_range_m: 100
+  radar_range_m: 90
   radar_noise_m: 0.5
   radar_speed_noise_mps: 0.3
-  thermal_range_m: 70        # thermal keeps working reasonably well in fog
+  thermal_range_m: 70
   thermal_base_confidence: 92
-  gps_noise_m: 0.03          # RTK-grade accuracy
+  rtk_noise_m: 0.03           # RTK-grade accuracy when available
   imu_noise: 0.05
+  imu_tilt_warning_threshold: 0.75   # |lateral_offset| beyond this -> IMU orientation TILT WARNING
+  wheel_speed_noise_kmh: 0.2
 
 risk:
-  # Time-To-Collision thresholds (seconds). Below "red" is CRITICAL.
   ttc_red_s: 4.0
   ttc_orange_s: 8.0
   ttc_yellow_s: 15.0
-  # If vehicles are not closing but are still very close, still caution.
   caution_distance_m: 20
   critical_distance_m: 8
 
 fog:
-  # visibility (metres) associated with each manual fog level
   levels:
     CLEAR: 200
     LIGHT: 80
     MEDIUM: 30
     HEAVY: 12
     EXTREME: 5
-  # metres of visibility lost per minute when auto-deterioration is enabled
   deterioration_rate_m_per_min: 6
   minimum_visibility_m: 3
+  # spatial fog zones: each mine location gets a multiplier applied to
+  # the global visibility value, so the blind curve is always the
+  # foggiest spot regardless of the overall preset.
+  zone_multipliers:
+    dumping: 1.0
+    bench_road: 0.85
+    ramp: 0.7
+    blind_curve: 0.35
+    sharp_curve: 0.55
+    intersection: 0.8
+    loading: 0.9
+    gps_denied: 0.6
 
 speed_advisor:
-  visibility_factor_kmh_per_m: 1.8   # recommended speed scales with visibility
-  zone_speed_multiplier:
-    straight: 1.0
-    curve: 0.55
-    intersection: 0.7
-    loading: 0.4
-    dumping: 0.4
-  traffic_density_penalty: 0.85      # applied when 2+ vehicles are nearby
+  # base speed (km/h) derived from local road radius-of-curvature (m):
+  # speed = clamp(radius * curvature_k, min_curve_speed, max_speed)
+  curvature_k: 0.075
+  visibility_factor_kmh_per_m: 1.8
+  min_curve_speed_kmh: 9
+  max_speed_kmh: 26
+  # fixed caps for named zones (km/h), applied on top of the curvature speed
+  zone_caps:
+    blind_curve: 8
+    sharp_curve: 12
+    intersection: 10
+    loading: 5
+    dumping: 6
+    ramp: 14
+  ramp_window_half_width: 0.15
+  intersection_half_width: 0.12
+  gradient_loaded_factor: 0.82    # loaded + ascending: slower
+  gradient_empty_factor: 1.12     # empty + descending: faster
+  traffic_density_penalty: 0.85
   min_recommended_kmh: 0
-  absolute_max_kmh: 30
+
+haul_cycle:
+  loading_pause_s: 4
+  dumping_pause_s: 3
 
 emergency:
   sudden_stop_drop_kmh: 15
   breakdown_stall_seconds: 6
   comm_loss_timeout_s: 3
   collision_distance_m: 3
-  road_edge_probability_per_tick: 0.0006
-
-fleet:
-  fog_zone_name: "Blind Curve / Fog Zone (Route A)"
-  bypass_route_name: "Perimeter Bypass (Route B)"
+  road_edge_probability_per_tick: 0.0004

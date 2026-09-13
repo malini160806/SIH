@@ -1,26 +1,24 @@
 """
 Fog controller.
 
-Two modes:
-  * Manual  - operator picks a level (CLEAR/LIGHT/MEDIUM/HEAVY/EXTREME)
-              and visibility snaps to the configured value for that level.
-  * Auto    - visibility deteriorates over time at a configurable rate
-              (metres lost per minute), used by DEMO MODE and for a more
-              "alive" feeling simulation.
-
-`status_for_visibility()` maps a visibility distance back to a label so
-the two modes always agree on how a given visibility is described.
+Maintains one global visibility value (manual level, or auto
+deterioration over time), then derives *spatial* visibility per mine
+zone by applying a per-zone-type multiplier — the blind curve is
+always the foggiest part of the mine relative to wherever else the
+global preset currently sits, matching real microclimate behaviour in
+a pit (fog pools in low, sheltered curves before it reaches open
+benches).
 """
 from __future__ import annotations
 
 
 class FogController:
     def __init__(self, cfg: dict):
-        self.levels: dict[str, float] = cfg["levels"]  # e.g. {"CLEAR": 200, ...}
+        self.levels: dict[str, float] = cfg["levels"]
         self.deterioration_rate = cfg["deterioration_rate_m_per_min"]
         self.minimum_visibility = cfg["minimum_visibility_m"]
+        self.zone_multipliers: dict[str, float] = cfg["zone_multipliers"]
 
-        # order from best to worst so status_for_visibility can walk down
         self._ordered = sorted(self.levels.items(), key=lambda kv: -kv[1])
 
         self.auto_mode = False
@@ -44,7 +42,7 @@ class FogController:
         for label, threshold in self._ordered:
             if visibility_m >= threshold:
                 return label
-        return self._ordered[-1][0]  # worst label (EXTREME)
+        return self._ordered[-1][0]
 
     def update(self, dt_seconds: float):
         if not self.auto_mode:
@@ -54,10 +52,19 @@ class FogController:
         start = self.levels["CLEAR"]
         self.visibility_m = max(self.minimum_visibility, start - lost)
 
+    def visibility_at(self, zone_type: str) -> float:
+        mult = self.zone_multipliers.get(zone_type, 1.0)
+        return max(self.minimum_visibility, self.visibility_m * mult)
+
     def state(self) -> dict:
+        zones = {
+            zt: {"visibility_m": round(self.visibility_at(zt), 1), "status": self.status_for_visibility(self.visibility_at(zt))}
+            for zt in self.zone_multipliers
+        }
         return {
             "visibility_m": round(self.visibility_m, 1),
             "status": self.status_for_visibility(self.visibility_m),
             "auto_mode": self.auto_mode,
             "elapsed_minutes": round(self.elapsed_minutes, 1),
+            "zones": zones,
         }

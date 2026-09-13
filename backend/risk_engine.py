@@ -3,11 +3,16 @@ Collision-risk engine.
 
 TTC = Distance / Relative Closing Speed
 
-Warning levels (thresholds come from config.yaml, not hard-coded):
-    RED    - TTC <= ttc_red_s                      (critical, brake/stop)
-    ORANGE - TTC <= ttc_orange_s                    (high risk)
-    YELLOW - TTC <= ttc_yellow_s, or very close but not closing (caution)
-    GREEN  - everything else (safe)
+`closing_speed_mps` already accounts for whether the two trucks are
+head-on (opposite travel direction, e.g. the blind-curve scenario) or
+one following the other (same direction) — see
+VehicleManager.closing_speed(). Warning-level thresholds come from
+config.yaml, not hard-coded:
+
+    RED    - TTC <= ttc_red_s (or gap already critical)
+    ORANGE - TTC <= ttc_orange_s
+    YELLOW - TTC <= ttc_yellow_s, or very close but not currently closing
+    GREEN  - everything else
 """
 from __future__ import annotations
 
@@ -22,9 +27,10 @@ class RiskEngine:
         self.caution_distance = cfg["caution_distance_m"]
         self.critical_distance = cfg["critical_distance_m"]
 
-    def assess(self, gap_m: float | None, closing_speed_mps: float, ahead_id: str | None) -> RiskAssessment:
+    def assess(self, gap_m: float | None, closing_speed_mps: float, other_id: str | None,
+               relation: str | None) -> RiskAssessment:
         if gap_m is None:
-            return RiskAssessment(level="GREEN", ttc_s=None, gap_m=None, ahead_id=None)
+            return RiskAssessment(level="GREEN", ttc_s=None, gap_m=None, other_id=None, relation=None)
 
         ttc = gap_m / closing_speed_mps if closing_speed_mps > 0.05 else None
 
@@ -43,5 +49,6 @@ class RiskEngine:
             level=level,
             ttc_s=round(ttc, 1) if ttc is not None else None,
             gap_m=round(gap_m, 1),
-            ahead_id=ahead_id,
+            other_id=other_id,
+            relation=relation,
         )

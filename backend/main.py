@@ -1,10 +1,11 @@
 """
 FastAPI application entry point.
 
-Serves the two dashboards (control room + driver view) as static
-files, exposes a small REST API for configuration and demo control,
-and streams live simulation state to every connected browser over a
-single WebSocket endpoint (/ws/state).
+Serves the control-room dashboard as static files, exposes a REST API
+for configuration/demo/simulation control, and streams live simulation
+state to every connected browser over a single WebSocket endpoint
+(/ws/state). The static road geometry is served once via /api/road
+rather than repeated on every tick, to keep the per-tick payload small.
 """
 from __future__ import annotations
 
@@ -69,7 +70,6 @@ async def _simulation_loop():
             state = engine.tick()
             await manager.broadcast(json.dumps(state))
         except Exception:
-            # never let one bad tick kill the loop for every connected client
             import traceback
             traceback.print_exc()
         await asyncio.sleep(engine.dt)
@@ -81,15 +81,15 @@ async def control_room_page():
     return FileResponse(os.path.join(FRONTEND_DIR, "control_room.html"))
 
 
-@app.get("/driver")
-async def driver_page():
-    return FileResponse(os.path.join(FRONTEND_DIR, "driver.html"))
-
-
 # ---------------------------------------------------------------- API
 @app.get("/api/config")
 async def get_config():
     return load_config()
+
+
+@app.get("/api/road")
+async def get_road():
+    return engine.road.to_dict()
 
 
 @app.post("/api/fog/{level}")
@@ -114,6 +114,36 @@ async def demo_start():
 async def demo_stop():
     engine.demo.stop(engine)
     return {"ok": True}
+
+
+@app.post("/api/pause/{paused}")
+async def set_paused(paused: bool):
+    engine.paused = paused
+    return {"ok": True, "paused": engine.paused}
+
+
+@app.post("/api/reset")
+async def reset_sim():
+    engine.reset()
+    return {"ok": True}
+
+
+@app.post("/api/sim-speed/{multiplier}")
+async def set_sim_speed(multiplier: float):
+    engine.sim_speed = max(0.25, min(4.0, multiplier))
+    return {"ok": True, "sim_speed": engine.sim_speed}
+
+
+@app.post("/api/gps-denied/{enabled}")
+async def set_gps_denied(enabled: bool):
+    engine.gps_force_denied = enabled
+    return {"ok": True, "gps_force_denied": engine.gps_force_denied}
+
+
+@app.post("/api/v2x/{enabled}")
+async def set_v2x(enabled: bool):
+    engine.v2x_enabled = enabled
+    return {"ok": True, "v2x_enabled": engine.v2x_enabled}
 
 
 @app.post("/api/vehicle/{vehicle_id}/stall/{enabled}")
@@ -143,7 +173,6 @@ async def ws_state(websocket: WebSocket):
     await manager.connect(websocket)
     try:
         while True:
-            # keep the connection open; clients don't need to send anything
             await websocket.receive_text()
     except WebSocketDisconnect:
         manager.disconnect(websocket)

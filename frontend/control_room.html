@@ -10,9 +10,12 @@
 <header class="top-bar">
   <div>
     <h1>FOGNET CONTROL CENTRE</h1>
-    <div class="subtitle">AI-Based Cooperative Perception &amp; Haulage Safety Network</div>
+    <div class="subtitle">Predictive &amp; Cooperative Fog Intelligence — Open-Pit Haulage Safety</div>
   </div>
   <div class="controls">
+    <button id="pause-btn">⏸ Pause</button>
+    <button id="reset-btn">⟲ Reset</button>
+    <button id="demo-btn" class="demo-btn">▶ DEMO MODE</button>
     <select id="fog-select">
       <option value="CLEAR">Fog: Clear</option>
       <option value="LIGHT">Fog: Light</option>
@@ -20,16 +23,23 @@
       <option value="HEAVY">Fog: Heavy</option>
       <option value="EXTREME">Fog: Extreme</option>
     </select>
-    <button id="fog-auto-btn">Auto-Deteriorate: OFF</button>
-    <button id="demo-btn" class="demo-btn">▶ DEMO MODE</button>
-    <a href="/driver" target="_blank"><button>Open Driver View</button></a>
+    <button id="fog-auto-btn">Auto-Fog: OFF</button>
+    <select id="sim-speed-select">
+      <option value="0.5">Speed: 0.5x</option>
+      <option value="1" selected>Speed: 1x</option>
+      <option value="2">Speed: 2x</option>
+      <option value="4">Speed: 4x</option>
+    </select>
+    <button id="gps-denied-btn">GPS-Denied: OFF</button>
+    <button id="v2x-btn">V2X: ON</button>
+    <button id="links-btn">Links: ON</button>
   </div>
 </header>
 
 <main class="layout">
   <section>
     <div class="panel" id="twin-wrap">
-      <h2>Digital Twin — Mine Haul Loop</h2>
+      <h2>Digital Twin — Spiral Open-Pit Haul Network</h2>
       <canvas id="twin-canvas"></canvas>
       <div class="demo-banner" id="demo-banner">
         <span class="step-title" id="demo-step-title"></span>
@@ -38,55 +48,54 @@
     </div>
 
     <div class="panel">
-      <h2>Fleet Vehicles</h2>
+      <h2>Fleet Status <span class="hint">(click a truck on the map to inspect it)</span></h2>
       <table class="vehicle-table">
-        <thead><tr><th>Vehicle</th><th>Speed</th><th>Recommended</th><th>Zone</th><th>Status</th></tr></thead>
+        <thead><tr><th>Vehicle</th><th>Speed</th><th>Bench</th><th>GPS</th><th>V2X</th><th>Status</th></tr></thead>
         <tbody id="vehicle-rows"></tbody>
       </table>
     </div>
 
     <div class="panel">
-      <h2>V2V Communication Log</h2>
-      <div class="msg-log" id="v2v-log"></div>
+      <h2>Emergency Alerts</h2>
+      <div id="emergency-list"><div class="label">No active emergencies</div></div>
     </div>
   </section>
 
   <section>
     <div class="panel">
-      <h2>Visibility &amp; Fog Status</h2>
+      <h2 id="detail-title">Vehicle Detail — select a truck</h2>
+      <div id="vehicle-detail" class="detail-grid"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Sensor Status <span class="hint">(selected truck)</span></h2>
+      <div id="sensor-panel"></div>
+    </div>
+
+    <div class="panel">
+      <h2>V2X — Multi-Tier Communication</h2>
+      <div id="v2x-chain" class="v2x-chain"></div>
+      <div class="msg-log" id="v2v-log"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Fog &amp; Visibility</h2>
       <div class="big-readout">
         <div>
           <div class="value" id="visibility-value">--</div>
-          <div class="label">Current Visibility (m)</div>
+          <div class="label">Global Visibility (m)</div>
         </div>
         <div>
           <div class="value" id="fog-status-value">--</div>
           <div class="label">Fog Status</div>
         </div>
       </div>
+      <div id="fog-zones" class="fog-zones"></div>
     </div>
 
     <div class="panel">
-      <h2>Collision Risk / TTC</h2>
-      <div id="risk-cards"></div>
-    </div>
-
-    <div class="panel">
-      <h2>Sensor Fusion</h2>
-      <div id="fusion-cards"></div>
-    </div>
-
-    <div class="panel">
-      <h2>Fleet Optimization</h2>
-      <div class="recommendation" id="fleet-recommendation">--</div>
-      <div class="route-row"><span id="route-a-name"></span><span id="route-a-risk"></span></div>
-      <div class="route-row"><span id="route-b-name"></span><span id="route-b-risk"></span></div>
-      <ul class="actions-list" id="fleet-actions"></ul>
-    </div>
-
-    <div class="panel">
-      <h2>Emergency Alerts</h2>
-      <div id="emergency-list"><div class="label">No active emergencies</div></div>
+      <h2>Collision Risk / TTC <span class="hint">(selected truck)</span></h2>
+      <div id="risk-card"></div>
     </div>
   </section>
 </main>
