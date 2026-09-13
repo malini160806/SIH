@@ -1,818 +1,522 @@
 /**
- * 2D digital-twin renderer for the mine haul-road loop.
+ * Digital-twin renderer for the FOGNET spiral open-pit mine.
  *
- * Visual features:
- *  - Background: real aerial photograph of open-pit mine (mine_bg.jpg)
- *  - Dark vignette overlay for contrast
- *  - Routes: glowing colored lines (green/yellow/orange/red) matching reference image
- *  - Fog zones: localised animated cloud puffs (NO global white overlay)
- *  - Vehicles: yellow dump-truck body, cab, headlights, status glow ring, sensor cone
- *  - V2V: dashed blue animated lines + travelling data-packet dot
- *  - Infrastructure labels: pill badges for Loading Point, Crusher, Dumping Area, etc.
- *  - HUD: fog-status badge (top-left), live legend (bottom-right), compass (top-right)
+ * The mine is drawn as concentric stepped benches (annular bands,
+ * outer = surface down to inner = pit floor) with the haul road drawn
+ * as the actual spiral curve on top of them — this is what gives the
+ * twin real depth instead of a flat loop. Terrain never changes
+ * between ticks, so it's built once onto an offscreen canvas and
+ * reused; only fog, V2X links, and the 5 trucks redraw every frame.
  */
 const TWIN_W = 860;
 const TWIN_H = 680;
 
-const ZONE_COLORS = {
-  straight:     "#00e060",   // bright green  — safe route
-  curve:        "#f1c40f",   // yellow        — caution
-  intersection: "#ff7700",   // orange        — moderate risk
-  loading:      "#3fa9f5",   // cyan-blue     — loading point
-  dumping:      "#ff3c3c",   // red           — dumping
-};
-
-/* Route glow colours */
-const ZONE_GLOW = {
-  straight:     "rgba(0,220,90,0.50)",
-  curve:        "rgba(240,190,0,0.50)",
-  intersection: "rgba(255,120,0,0.55)",
-  loading:      "rgba(63,169,245,0.50)",
-  dumping:      "rgba(255,60,60,0.55)",
-};
-
-const ZONE_ICONS = {
-  loading:      "⛏",
-  dumping:      "🪨",
-  curve:        "↩",
-  intersection: "✦",
-};
-
 const VEHICLE_COLORS = {
-  GREEN:  "#2ecc71",
+  GREEN: "#2ecc71",
   YELLOW: "#f1c40f",
   ORANGE: "#e67e22",
-  RED:    "#e74c3c",
+  RED: "#e74c3c",
 };
 
-/* ── background image (preloaded once) ── */
-let _bgImage     = null;
-let _bgLoaded    = false;
+// bench bands, outermost (surface/jungle) -> innermost (ore-bearing rock near pit)
+const BENCH_COLORS = ["#2c4a25", "#4a5a2e", "#6b6238", "#7a5638", "#7a4530"];
+const OUTER_FRINGE_COLOR = "#1c3318";
+const PIT_FLOOR_COLOR = "#241a14";
 
-function _loadBg() {
-  if (_bgImage) return;
-  _bgImage = new Image();
-  _bgImage.onload  = () => { _bgLoaded = true; };
-  _bgImage.onerror = () => { _bgLoaded = false; console.warn("mine_bg.jpg not found, using canvas terrain"); };
-  _bgImage.src = "/static/img/mine_bg.jpg";
-}
+// icon per zone TYPE; the label text itself comes from each zone's own
+// `name` (so a hairpin, a tight 90° bend and a high-risk curve — all
+// zone_type "sharp_curve" — still get distinct on-map labels)
+const ZONE_ICON_BY_TYPE = {
+  blind_curve: "⚠️",
+  sharp_curve: "↩️",
+  intersection: "✚",
+  ramp: "⛰️",
+  loading: "⛏️",
+  dumping: "🪨",
+};
 
-/* ── localised fog-cloud particles (spawned near fog-zone segments) ── */
-let fogClouds = [];
-let fogCloudsInited = false;
-
-function initFogClouds(fogZoneSegments) {
-  fogClouds = [];
-  fogCloudsInited = true;
-  for (const seg of fogZoneSegments) {
-    const [ax, ay] = seg.a;
-    const [bx, by] = seg.b;
-    const count = 18;
-    for (let i = 0; i < count; i++) {
-      const t = Math.random();
-      fogClouds.push({
-        x: ax + (bx - ax) * t + (Math.random() - 0.5) * 80,
-        y: ay + (by - ay) * t + (Math.random() - 0.5) * 80,
-        r: 25 + Math.random() * 50,
-        dx: (Math.random() - 0.5) * 0.35,
-        dy: (Math.random() - 0.5) * 0.12,
-        phase: Math.random() * Math.PI * 2,
-        homeX: ax + (bx - ax) * t,
-        homeY: ay + (by - ay) * t,
-      });
-    }
-  }
-}
-
-function stepFogClouds() {
-  for (const p of fogClouds) {
-    p.x += p.dx;
-    p.y += p.dy;
-    p.phase += 0.015;
-    p.x += (p.homeX - p.x) * 0.003;
-    p.y += (p.homeY - p.y) * 0.003;
-  }
-}
-
-/* ── animation frame counter ── */
-let _twinFrame = 0;
+let _terrainCanvas = null;
+let _terrainKey = null;
+let _roadCache = null;
 
 function initTwinCanvas(canvas) {
-  canvas.width  = TWIN_W;
+  canvas.width = TWIN_W;
   canvas.height = TWIN_H;
-  _loadBg();
   return canvas.getContext("2d");
 }
 
-function lerp(a, b, t) { return a + (b - a) * t; }
+function mulberry32(seed) {
+  return function () {
+    seed |= 0;
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
 
-/* ────────────────────── MAIN DRAW ────────────────────── */
-function drawTwin(ctx, state) {
-  _twinFrame++;
-  stepFogClouds();
+function radiusAt(road, theta) {
+  return road.outer_radius_m - (road.outer_radius_m - road.inner_radius_m) * (theta / road.theta_max);
+}
 
-  ctx.clearRect(0, 0, TWIN_W, TWIN_H);
+function pointAtTheta(road, theta) {
+  const r = radiusAt(road, theta);
+  return [road.center[0] + r * Math.cos(theta), road.center[1] + r * Math.sin(theta)];
+}
 
-  /* ── 1. Background: real aerial photo ── */
-  if (_bgLoaded && _bgImage) {
-    ctx.drawImage(_bgImage, 0, 0, TWIN_W, TWIN_H);
-  } else {
-    /* Fallback canvas terrain while image loads */
-    const bgGrad = ctx.createRadialGradient(TWIN_W*0.5, TWIN_H*0.48, 60, TWIN_W*0.5, TWIN_H*0.48, TWIN_W*0.72);
-    bgGrad.addColorStop(0,    "#1a0d06");
-    bgGrad.addColorStop(0.30, "#3d2010");
-    bgGrad.addColorStop(0.58, "#6b4020");
-    bgGrad.addColorStop(0.80, "#1e3a10");
-    bgGrad.addColorStop(1.0,  "#0e1e08");
-    ctx.fillStyle = bgGrad;
-    ctx.fillRect(0, 0, TWIN_W, TWIN_H);
+function drawTree(ctx, x, y, s, rand) {
+  ctx.fillStyle = "#241d12";
+  ctx.fillRect(x - 0.6 * s, y, 1.2 * s, 2 * s);
+  ctx.fillStyle = `rgb(${35 + rand() * 18},${65 + rand() * 22},${28 + rand() * 14})`;
+  ctx.beginPath();
+  ctx.moveTo(x, y - 4 * s);
+  ctx.lineTo(x - 2.8 * s, y + 0.6 * s);
+  ctx.lineTo(x + 2.8 * s, y + 0.6 * s);
+  ctx.closePath();
+  ctx.fill();
+}
+
+function drawRockOutcrop(ctx, x, y, r, rand) {
+  ctx.fillStyle = "#4a4038";
+  ctx.beginPath();
+  const n = 8;
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * Math.PI * 2;
+    const rr = r * (0.75 + rand() * 0.4);
+    const px = x + Math.cos(a) * rr,
+      py = y + Math.sin(a) * rr;
+    i === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
   }
+  ctx.closePath();
+  ctx.fill();
+  ctx.strokeStyle = "rgba(15,12,10,0.5)";
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+}
 
-  /* ── 2. Dark overlay for contrast (keeps UI readable) ── */
-  // Vignette
-  const vig = ctx.createRadialGradient(TWIN_W*0.5, TWIN_H*0.5, TWIN_W*0.2, TWIN_W*0.5, TWIN_H*0.5, TWIN_W*0.8);
-  vig.addColorStop(0,   "rgba(0,0,0,0)");
-  vig.addColorStop(0.7, "rgba(0,0,0,0.15)");
-  vig.addColorStop(1,   "rgba(0,0,0,0.65)");
-  ctx.fillStyle = vig;
+function drawChevronSign(ctx, x, y, headingRad, color) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(headingRad);
+  ctx.fillStyle = "#111820";
+  ctx.strokeStyle = "rgba(0,0,0,0.6)";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  if (ctx.roundRect) ctx.roundRect(-3, -9, 16, 18, 2);
+  else ctx.rect(-3, -9, 16, 18);
+  ctx.fill();
+  ctx.stroke();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 3;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.beginPath();
+  ctx.moveTo(1, -6);
+  ctx.lineTo(8, 0);
+  ctx.lineTo(1, 6);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function buildTerrain(road) {
+  const canvas = document.createElement("canvas");
+  canvas.width = TWIN_W;
+  canvas.height = TWIN_H;
+  const ctx = canvas.getContext("2d");
+  const rand = mulberry32(11);
+  const [cx, cy] = road.center;
+  const spacing = (road.outer_radius_m - road.inner_radius_m) / road.turns;
+
+  ctx.fillStyle = "#0e1520";
   ctx.fillRect(0, 0, TWIN_W, TWIN_H);
 
-  /* ── 3. Infrastructure labels (under routes so roads go on top) ── */
-  drawTerrainFeatures(ctx);
+  // outer forest fringe beyond the mine rim
+  ctx.fillStyle = OUTER_FRINGE_COLOR;
+  ctx.beginPath();
+  ctx.arc(cx, cy, road.outer_radius_m + 90, 0, Math.PI * 2);
+  ctx.fill();
 
-  const road = state.road;
-  if (!road) return;
-  const pts   = road.points;
-  const zones = road.zones;
-  const fogStatus  = state.fog ? state.fog.status    : "CLEAR";
-  const visibility = state.fog ? state.fog.visibility_m : 200;
-
-  /* ── 4. Initialise fog clouds from road data (once) ── */
-  if (!fogCloudsInited) {
-    const segs = [];
-    for (let i = 0; i < pts.length; i++) {
-      if (zones[i].is_fog_zone) {
-        segs.push({ a: pts[i], b: pts[(i + 1) % pts.length] });
-      }
-    }
-    initFogClouds(segs);
+  // concentric stepped benches, outer -> inner
+  for (let k = 0; k < road.turns; k++) {
+    const rOut = road.outer_radius_m - k * spacing;
+    ctx.fillStyle = BENCH_COLORS[Math.min(k, BENCH_COLORS.length - 1)];
+    ctx.beginPath();
+    ctx.arc(cx, cy, rOut, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = "rgba(15,12,8,0.35)";
+    ctx.lineWidth = 1;
+    ctx.stroke();
   }
 
-  /* ── 5. Road segments — glowing colored route lines ── */
-  for (let i = 0; i < pts.length; i++) {
-    const a = pts[i];
-    const b = pts[(i + 1) % pts.length];
-    const zone = zones[i];
-    const routeColor = ZONE_COLORS[zone.type] || "#00e060";
-    const routeGlow  = ZONE_GLOW[zone.type]   || "rgba(0,220,90,0.45)";
+  // pit floor
+  ctx.fillStyle = PIT_FLOOR_COLOR;
+  ctx.beginPath();
+  ctx.arc(cx, cy, road.inner_radius_m, 0, Math.PI * 2);
+  ctx.fill();
 
-    // Wide outer glow halo
-    ctx.strokeStyle = routeGlow;
-    ctx.lineWidth   = 22;
-    ctx.lineCap     = "round";
-    ctx.lineJoin    = "round";
-    ctx.beginPath();
-    ctx.moveTo(a[0], a[1]);
-    ctx.lineTo(b[0], b[1]);
-    ctx.stroke();
+  const pondGrad = ctx.createRadialGradient(cx - 6, cy - 6, 3, cx, cy, road.inner_radius_m * 0.6);
+  pondGrad.addColorStop(0, "#3f8f94");
+  pondGrad.addColorStop(1, "#123a3d");
+  ctx.fillStyle = pondGrad;
+  ctx.beginPath();
+  ctx.ellipse(cx, cy, road.inner_radius_m * 0.6, road.inner_radius_m * 0.44, 0, 0, Math.PI * 2);
+  ctx.fill();
 
-    // Narrow bright core
-    ctx.strokeStyle = routeColor;
-    ctx.lineWidth   = 4;
-    ctx.beginPath();
-    ctx.moveTo(a[0], a[1]);
-    ctx.lineTo(b[0], b[1]);
-    ctx.stroke();
+  // trees scattered on the outer surface bench + fringe
+  for (let i = 0; i < 110; i++) {
+    const a = rand() * Math.PI * 2;
+    const r = road.outer_radius_m + rand() * 70 - spacing * (rand() * 0.6);
+    if (r < road.outer_radius_m - spacing) continue;
+    drawTree(ctx, cx + Math.cos(a) * r, cy + Math.sin(a) * r, 1.5 + rand() * 1.6, rand);
+  }
 
-    // Animated traveling white dash (gives motion on the route)
-    ctx.strokeStyle   = "rgba(255,255,255,0.65)";
-    ctx.lineWidth     = 1.8;
-    ctx.setLineDash([7, 10]);
-    ctx.lineDashOffset = -_twinFrame * 0.55;
-    ctx.beginPath();
-    ctx.moveTo(a[0], a[1]);
-    ctx.lineTo(b[0], b[1]);
-    ctx.stroke();
-    ctx.setLineDash([]);
-    ctx.lineDashOffset = 0;
+  // curve zones (all of them, keyed by theta range) — used to paint a
+  // warning-colored halo under the road at every sharp/blind bend, so
+  // the bend is obvious at a glance instead of only visible as a subtle
+  // geometric kink
+  const curveZones = road.zones.filter((z) => z.type === "sharp_curve" || z.type === "blind_curve");
+  function curveZoneAt(theta) {
+    return curveZones.find((z) => theta >= z.theta_start && theta <= z.theta_end) || null;
+  }
+  const CURVE_HALO_COLOR = { sharp_curve: "rgba(241,196,15,0.55)", blind_curve: "rgba(231,76,60,0.6)" };
 
-    // Fog-zone pulsing blue aura (localised, not global)
-    if (zone.is_fog_zone) {
-      const base  = { CLEAR: 0.02, LIGHT: 0.10, MEDIUM: 0.20, HEAVY: 0.34, EXTREME: 0.50 }[fogStatus] || 0.03;
-      const pulse = Math.sin(_twinFrame * 0.035) * 0.07;
-      ctx.strokeStyle = `rgba(180,215,255,${Math.max(0, base + pulse)})`;
-      ctx.lineWidth   = 32;
-      ctx.lineCap     = "round";
+  // the spiral haul road itself
+  const pts = road.points;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const a = pts[i],
+      b = pts[i + 1];
+    const midTheta = (a[2] + b[2]) / 2;
+    const curveZone = curveZoneAt(midTheta);
+
+    if (curveZone) {
+      ctx.strokeStyle = CURVE_HALO_COLOR[curveZone.type];
+      ctx.lineWidth = 34;
+      ctx.lineCap = "round";
       ctx.beginPath();
       ctx.moveTo(a[0], a[1]);
       ctx.lineTo(b[0], b[1]);
       ctx.stroke();
     }
-  }
 
-  /* ── 6. Zone labels ── */
-  const labeled = new Set();
-  for (let i = 0; i < pts.length; i++) {
-    const zone = zones[i];
-    if (["loading","dumping","curve","intersection"].includes(zone.type) && !labeled.has(zone.type)) {
-      labeled.add(zone.type);
-      const p        = pts[i];
-      const icon     = ZONE_ICONS[zone.type] || "";
-      const txt      = `${icon} ${zone.name.toUpperCase()}`;
-      ctx.font       = "bold 11px Segoe UI";
-      const tw       = ctx.measureText(txt).width;
-      const lx = p[0] - tw/2 - 7;
-      const ly = p[1] - 34;
-      ctx.fillStyle = "rgba(8,14,22,0.82)";
+    ctx.strokeStyle = "#1c1712";
+    ctx.lineWidth = 22;
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    ctx.moveTo(a[0], a[1]);
+    ctx.lineTo(b[0], b[1]);
+    ctx.stroke();
+
+    ctx.strokeStyle = curveZone ? (curveZone.type === "blind_curve" ? "#a05840" : "#a08a4a") : "#9c9080";
+    ctx.lineWidth = 16;
+    ctx.beginPath();
+    ctx.moveTo(a[0], a[1]);
+    ctx.lineTo(b[0], b[1]);
+    ctx.stroke();
+
+    ctx.strokeStyle = "rgba(255,214,51,0.75)";
+    ctx.lineWidth = 1.6;
+    ctx.setLineDash([7, 7]);
+    ctx.beginPath();
+    ctx.moveTo(a[0], a[1]);
+    ctx.lineTo(b[0], b[1]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // white edge curbs
+    const dx = b[0] - a[0],
+      dy = b[1] - a[1];
+    const len = Math.hypot(dx, dy) || 1;
+    const ex = (-dy / len) * 8,
+      ey = (dx / len) * 8;
+    ctx.strokeStyle = "rgba(238,235,224,0.8)";
+    ctx.lineWidth = 1.1;
+    [1, -1].forEach((side) => {
       ctx.beginPath();
-      ctx.roundRect(lx, ly, tw + 14, 20, 5);
-      ctx.fill();
-      ctx.strokeStyle = "rgba(255,255,255,0.12)";
-      ctx.lineWidth   = 0.6;
-      ctx.beginPath();
-      ctx.roundRect(lx, ly, tw + 14, 20, 5);
+      ctx.moveTo(a[0] + ex * side, a[1] + ey * side);
+      ctx.lineTo(b[0] + ex * side, b[1] + ey * side);
       ctx.stroke();
-      ctx.fillStyle = "#d8ecf8";
-      ctx.fillText(txt, lx + 7, ly + 14);
-    }
-  }
-
-  /* ── 7. V2V communication lines ── */
-  const msgs = state.v2v_messages || [];
-  msgs.forEach((m) => {
-    const s = state.vehicles[m.sender];
-    const r = state.vehicles[m.receiver];
-    if (!s || !r) return;
-
-    const t = (_twinFrame * 0.06) % 1;
-
-    // Glow underlay
-    ctx.strokeStyle = `rgba(63,169,245,${0.12 + Math.sin(t * Math.PI * 2) * 0.08})`;
-    ctx.lineWidth   = 3;
-    ctx.setLineDash([]);
-    ctx.beginPath();
-    ctx.moveTo(s.x, s.y);
-    ctx.lineTo(r.x, r.y);
-    ctx.stroke();
-
-    // Animated dashes — blue
-    ctx.strokeStyle   = "rgba(63,200,255,0.7)";
-    ctx.lineWidth     = 1.5;
-    ctx.setLineDash([4, 6]);
-    ctx.lineDashOffset = -_twinFrame * 0.8;
-    ctx.beginPath();
-    ctx.moveTo(s.x, s.y);
-    ctx.lineTo(r.x, r.y);
-    ctx.stroke();
-    ctx.setLineDash([]);
-    ctx.lineDashOffset = 0;
-
-    // V2V label midpoint
-    const mx = lerp(s.x, r.x, 0.5);
-    const my = lerp(s.y, r.y, 0.5);
-    ctx.fillStyle = "rgba(8,14,22,0.75)";
-    ctx.beginPath();
-    ctx.roundRect(mx - 15, my - 9, 30, 15, 4);
-    ctx.fill();
-    ctx.fillStyle = "#3fc8ff";
-    ctx.font      = "bold 9px Segoe UI";
-    ctx.textAlign = "center";
-    ctx.fillText("V2V", mx, my + 3);
-    ctx.textAlign = "start";
-
-    // Travelling packet dot
-    const px = lerp(s.x, r.x, t);
-    const py = lerp(s.y, r.y, t);
-    ctx.fillStyle = "#3fa9f5";
-    ctx.beginPath();
-    ctx.arc(px, py, 3, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = "rgba(63,169,245,0.3)";
-    ctx.beginPath();
-    ctx.arc(px, py, 7, 0, Math.PI * 2);
-    ctx.fill();
-  });
-
-  /* ── 8. Vehicles — yellow dump-truck style ── */
-  Object.values(state.vehicles || {}).forEach((v) => {
-    const hazardColor = VEHICLE_COLORS[v.hazard_status] || "#2ecc71";
-
-    /* — Green / status glow ring (large) — matches reference image green circles */
-    ctx.save();
-    ctx.translate(v.x, v.y);
-    const glowOuter = ctx.createRadialGradient(0, 0, 12, 0, 0, 38);
-    glowOuter.addColorStop(0,   hazardColor + "55");
-    glowOuter.addColorStop(0.6, hazardColor + "22");
-    glowOuter.addColorStop(1,   "rgba(0,0,0,0)");
-    ctx.fillStyle = glowOuter;
-    ctx.beginPath();
-    ctx.arc(0, 0, 38, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Pulsing ring (outer circle like in reference)
-    const ringPulse = 26 + Math.sin(_twinFrame * 0.1) * 4;
-    ctx.strokeStyle = hazardColor + "aa";
-    ctx.lineWidth   = 2;
-    ctx.beginPath();
-    ctx.arc(0, 0, ringPulse, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.restore();
-
-    // Sensor forward cone
-    ctx.save();
-    ctx.translate(v.x, v.y);
-    ctx.rotate((v.heading_deg * Math.PI) / 180);
-    const sensorRange = Math.min(visibility * 0.35, 60);
-    ctx.fillStyle = v.hazard_status === "RED"
-      ? `rgba(231,76,60,0.12)` : `rgba(63,200,255,0.07)`;
-    ctx.beginPath();
-    ctx.moveTo(0, 0);
-    ctx.arc(0, 0, sensorRange, -Math.PI * 0.28, Math.PI * 0.28);
-    ctx.closePath();
-    ctx.fill();
-    ctx.restore();
-
-    // Truck body (yellow — matches reference HEMM dump trucks)
-    ctx.save();
-    ctx.translate(v.x, v.y);
-    ctx.rotate((v.heading_deg * Math.PI) / 180);
-
-    // Dump bed (large rectangle)
-    ctx.fillStyle = "#e8b800";
-    ctx.beginPath();
-    ctx.roundRect(-12, -7, 22, 14, 3);
-    ctx.fill();
-
-    // Cab (front wedge, slightly brighter)
-    ctx.fillStyle = "#ffd020";
-    ctx.beginPath();
-    ctx.moveTo(10, -5);
-    ctx.lineTo(16, 0);
-    ctx.lineTo(10, 5);
-    ctx.closePath();
-    ctx.fill();
-
-    // Wheels (dark dots)
-    ctx.fillStyle = "#1a1a1a";
-    [[-8,-7],[0,-7],[8,-7],[-8,7],[0,7],[8,7]].forEach(([wx,wy]) => {
-      ctx.beginPath();
-      ctx.arc(wx, wy, 2.5, 0, Math.PI * 2);
-      ctx.fill();
     });
-
-    // Headlights
-    ctx.fillStyle = "#fffde0";
-    ctx.globalAlpha = 0.9;
-    ctx.beginPath(); ctx.arc(15, -2.5, 1.5, 0, Math.PI * 2); ctx.fill();
-    ctx.beginPath(); ctx.arc(15,  2.5, 1.5, 0, Math.PI * 2); ctx.fill();
-    ctx.globalAlpha = 1.0;
-
-    // Status ring (tight inner)
-    ctx.strokeStyle = hazardColor;
-    ctx.lineWidth   = 1.8;
-    ctx.beginPath();
-    ctx.arc(0, 0, 16, 0, Math.PI * 2);
-    ctx.stroke();
-
-    // RED critical — pulsing outer ring
-    if (v.hazard_status === "RED") {
-      const pr = 20 + Math.sin(_twinFrame * 0.14) * 5;
-      ctx.strokeStyle = `rgba(231,76,60,${0.3 + Math.sin(_twinFrame * 0.14) * 0.2})`;
-      ctx.lineWidth   = 1.5;
-      ctx.shadowColor = "#e74c3c";
-      ctx.shadowBlur  = 10;
-      ctx.beginPath();
-      ctx.arc(0, 0, pr, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.shadowBlur = 0;
-    }
-    ctx.restore();
-
-    // Vehicle ID label
-    const idLabelX = v.x - 22;
-    const idLabelY = v.y - 26;
-    ctx.fillStyle = "rgba(8,14,22,0.82)";
-    ctx.beginPath();
-    ctx.roundRect(idLabelX - 2, idLabelY - 12, 48, 14, 3);
-    ctx.fill();
-    ctx.fillStyle = "#f0f8ff";
-    ctx.font      = "bold 10px Segoe UI";
-    ctx.fillText(v.id, idLabelX, idLabelY);
-
-    // Speed label below
-    const spd  = `${v.speed_kmh} km/h`;
-    const sw   = ctx.measureText(spd).width;
-    ctx.fillStyle = "rgba(8,14,22,0.72)";
-    ctx.beginPath();
-    ctx.roundRect(v.x - sw/2 - 4, v.y + 22, sw + 8, 14, 3);
-    ctx.fill();
-    ctx.fillStyle = hazardColor;
-    ctx.font      = "bold 10px Segoe UI";
-    ctx.fillText(spd, v.x - sw/2, v.y + 33);
-  });
-
-  /* ── 9. Localised fog clouds near fog zones ── */
-  const fogAlphaMap = { CLEAR: 0, LIGHT: 0.10, MEDIUM: 0.22, HEAVY: 0.40, EXTREME: 0.60 };
-  const fogAlpha = fogAlphaMap[fogStatus] || 0;
-  if (fogAlpha > 0.01) {
-    for (const p of fogClouds) {
-      const breathe = 0.5 + 0.5 * Math.sin(p.phase);
-      const a = fogAlpha * breathe * 0.22;
-      const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, p.r);
-      g.addColorStop(0,   `rgba(210,225,240,${a})`);
-      g.addColorStop(0.55,`rgba(200,215,235,${a * 0.4})`);
-      g.addColorStop(1,   "rgba(200,215,235,0)");
-      ctx.fillStyle = g;
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
-      ctx.fill();
-    }
   }
 
-  /* ── 10. HUD: fog badge (top-left) ── */
-  const badgeColors = {
-    CLEAR: "#2ecc71", LIGHT: "#9be15d", MEDIUM: "#f1c40f",
-    HEAVY: "#e67e22", EXTREME: "#e74c3c",
-  };
-  const bc  = badgeColors[fogStatus] || "#2ecc71";
-  const bt  = `FOG: ${fogStatus}  ·  ${visibility} m`;
-  ctx.font  = "bold 11px Segoe UI";
-  const btw = ctx.measureText(bt).width;
-  ctx.fillStyle = "rgba(6,10,18,0.88)";
-  ctx.beginPath();
-  ctx.roundRect(10, 10, btw + 32, 28, 6);
-  ctx.fill();
-  ctx.strokeStyle = bc + "55";
-  ctx.lineWidth   = 0.8;
-  ctx.beginPath();
-  ctx.roundRect(10, 10, btw + 32, 28, 6);
-  ctx.stroke();
-  ctx.fillStyle = bc;
-  ctx.beginPath();
-  ctx.arc(25, 24, 5, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = "#ddeeff";
-  ctx.fillText(bt, 36, 29);
-
-  /* ── 11. HUD: compass (top-right) ── */
-  drawCompass(ctx, TWIN_W - 42, 42, 24);
-
-  /* ── 12. HUD: Route Status legend (bottom-right) ── */
-  const lx = TWIN_W - 155;
-  const ly = TWIN_H - 106;
-  ctx.fillStyle = "rgba(6,10,18,0.86)";
-  ctx.beginPath();
-  ctx.roundRect(lx, ly, 145, 96, 7);
-  ctx.fill();
-  ctx.strokeStyle = "rgba(255,255,255,0.08)";
-  ctx.lineWidth   = 0.6;
-  ctx.beginPath();
-  ctx.roundRect(lx, ly, 145, 96, 7);
-  ctx.stroke();
-  ctx.font      = "bold 9px Segoe UI";
-  ctx.fillStyle = "#6088a0";
-  ctx.fillText("ROUTE STATUS", lx + 8, ly + 14);
-  const routeLegend = [
-    { c: "#00e060", l: "Safe" },
-    { c: "#f1c40f", l: "Caution" },
-    { c: "#ff7700", l: "High Risk" },
-    { c: "#ff3c3c", l: "Critical" },
-  ];
-  ctx.font = "10px Segoe UI";
-  routeLegend.forEach((it, i) => {
-    const iy = ly + 28 + i * 16;
-    // colored dash line (matches route style)
-    ctx.strokeStyle = it.c;
-    ctx.lineWidth   = 3;
-    ctx.beginPath();
-    ctx.moveTo(lx + 8, iy);
-    ctx.lineTo(lx + 24, iy);
-    ctx.stroke();
-    ctx.fillStyle = "#b8ccd8";
-    ctx.fillText(it.l, lx + 28, iy + 4);
+  // chevron curve-warning signs — the same universal ">" road markers real
+  // mountain/mine hairpins use, so every sharp/blind bend reads instantly
+  // as "curve ahead" instead of relying on the reader spotting the kink
+  curveZones.forEach((zone) => {
+    const color = zone.type === "blind_curve" ? "#ff5a3c" : "#ffd633";
+    const width = zone.theta_end - zone.theta_start;
+    [0.18, 0.5, 0.82].forEach((frac) => {
+      const theta = zone.theta_start + width * frac;
+      const [px, py] = pointAtTheta(road, theta);
+      const [tx, ty] = pointAtTheta(road, theta + 0.01);
+      const heading = Math.atan2(ty - py, tx - px);
+      const r = radiusAt(road, theta);
+      const ox = px + ((px - cx) / r) * 26,
+        oy = py + ((py - cy) / r) * 26;
+      drawChevronSign(ctx, ox, oy, heading, color);
+    });
   });
 
-  /* ── 13. Situational Awareness Overlay (demo blind-curve scenario) ── */
-  drawSituationalOverlay(ctx);
+  // blind-curve rock walls blocking the sightline around each blind bend
+  road.zones.filter((z) => z.type === "blind_curve").forEach((blindZone) => {
+    const midTheta = (blindZone.theta_start + blindZone.theta_end) / 2;
+    const [wx, wy] = pointAtTheta(road, midTheta);
+    const rMid = radiusAt(road, midTheta);
+    const ox = wx + ((wx - cx) / rMid) * 22,
+      oy = wy + ((wy - cy) / rMid) * 22;
+    drawRockOutcrop(ctx, ox, oy, 26, rand);
+    drawRockOutcrop(ctx, ox - 14, oy + 10, 16, rand);
+    drawRockOutcrop(ctx, ox + 16, oy - 8, 14, rand);
+  });
+
+  // smaller boulder accents at every other sharp bend (not a full blind wall,
+  // just visual emphasis that the curvature genuinely tightens here) — S-curve
+  // sweeps stay clear of rock so they read as smooth esses, not hairpins
+  road.zones.filter((z) => z.type === "sharp_curve" && z.kind !== "s_curve").forEach((zone) => {
+    const midTheta = (zone.theta_start + zone.theta_end) / 2;
+    const [sx, sy] = pointAtTheta(road, midTheta);
+    const rMid = radiusAt(road, midTheta);
+    const sox = sx + ((sx - cx) / rMid) * 18,
+      soy = sy + ((sy - cy) / rMid) * 18;
+    const size = zone.kind === "high_risk" ? 17 : 14;
+    drawRockOutcrop(ctx, sox, soy, size, rand);
+    drawRockOutcrop(ctx, sox - 10, soy + 6, size * 0.65, rand);
+  });
+
+  // intersection junction stub (a short spur, not a road trucks use)
+  const xZone = road.zones.find((z) => z.type === "intersection");
+  if (xZone) {
+    const midTheta = (xZone.theta_start + xZone.theta_end) / 2;
+    const [ix, iy] = pointAtTheta(road, midTheta);
+    const rMid = radiusAt(road, midTheta);
+    const stubX = ix + ((ix - cx) / rMid) * 34,
+      stubY = iy + ((iy - cy) / rMid) * 34;
+    ctx.strokeStyle = "#6b6050";
+    ctx.lineWidth = 10;
+    ctx.beginPath();
+    ctx.moveTo(ix, iy);
+    ctx.lineTo(stubX, stubY);
+    ctx.stroke();
+    ctx.fillStyle = "#7a6f5c";
+    ctx.beginPath();
+    ctx.arc(stubX, stubY, 8, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // GPS-denied shadow band, marked statically on the map
+  const gpsZone = road.zones.find((z) => z.type === "gps_denied");
+  if (gpsZone) {
+    const steps = 14;
+    for (let i = 0; i <= steps; i++) {
+      const theta = gpsZone.theta_start + (gpsZone.theta_end - gpsZone.theta_start) * (i / steps);
+      const [px, py] = pointAtTheta(road, theta);
+      ctx.fillStyle = "rgba(120,40,40,0.28)";
+      ctx.beginPath();
+      ctx.arc(px, py, 16, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    const midTheta = (gpsZone.theta_start + gpsZone.theta_end) / 2;
+    drawTag(ctx, road, midTheta, "📡 GPS-DENIED ZONE", "rgba(120,40,40,0.85)");
+  }
+
+  // zone tags — only "notable" zones get a map label (S-curve halves are
+  // merged into one tag) so the map stays legible instead of cluttered
+  const taggedSCurve = { done: false };
+  road.zones.forEach((zone) => {
+    const icon = ZONE_ICON_BY_TYPE[zone.type];
+    if (!icon) return;
+    if (zone.kind === "s_curve") {
+      if (taggedSCurve.done) return;
+      taggedSCurve.done = true;
+      drawTag(ctx, road, (zone.theta_start + zone.theta_end) / 2, `${icon} S-CURVE`, "rgba(10,10,8,0.65)");
+      return;
+    }
+    if (!zone.notable) return;
+    const midTheta = (zone.theta_start + zone.theta_end) / 2;
+    drawTag(ctx, road, midTheta, `${icon} ${zone.name.toUpperCase()}`, "rgba(10,10,8,0.65)");
+  });
+
+  // roadside V2I infrastructure units (RSUs)
+  road.v2i_nodes.forEach((node) => {
+    ctx.fillStyle = "#e8e2d0";
+    ctx.strokeStyle = "#3fa9f5";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.rect(node.x - 5, node.y - 10, 10, 14);
+    ctx.fill();
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(node.x, node.y - 10);
+    ctx.lineTo(node.x, node.y - 17);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(node.x, node.y - 17, 2, 0, Math.PI * 2);
+    ctx.fillStyle = "#3fa9f5";
+    ctx.fill();
+
+    ctx.font = "bold 9px Consolas, monospace";
+    const w = ctx.measureText(node.id).width + 8;
+    ctx.fillStyle = "rgba(10,14,20,0.75)";
+    ctx.fillRect(node.x - w / 2, node.y + 6, w, 12);
+    ctx.fillStyle = "#3fa9f5";
+    ctx.fillText(node.id, node.x - w / 2 + 4, node.y + 15);
+  });
+
+  return canvas;
 }
 
-/* ══════════════════════════════════════════════════════════════
-   SITUATIONAL AWARENESS OVERLAY
-   Reads from window._fognetOverlay (set by demo state machine).
-   Shows:
-   - DUMPER-01: large danger safety bubble (approaching blind curve)
-   - DUMPER-02: ghost "hidden vehicle" beyond blind curve
-   - Animated V2V pulse line between them
-   - ⚠ HIDDEN VEHICLE DETECTED warning card
-══════════════════════════════════════════════════════════════ */
-function drawSituationalOverlay(ctx) {
-  const ov = window._fognetOverlay;
-  if (!ov || !ov.active) return;
+function drawTag(ctx, road, theta, text, bg) {
+  const [x, y] = pointAtTheta(road, theta);
+  const r = radiusAt(road, theta);
+  const [cx, cy] = road.center;
+  const ox = x + ((x - cx) / r) * 46,
+    oy = y + ((y - cy) / r) * 46;
+  ctx.font = "11px Segoe UI Emoji, Segoe UI, sans-serif";
+  const w = ctx.measureText(text).width + 14;
+  ctx.fillStyle = bg;
+  ctx.beginPath();
+  if (ctx.roundRect) ctx.roundRect(ox - w / 2, oy - 10, w, 18, 4);
+  else ctx.rect(ox - w / 2, oy - 10, w, 18);
+  ctx.fill();
+  ctx.fillStyle = "#f2ead6";
+  ctx.fillText(text, ox - w / 2 + 6, oy + 3);
+}
 
-  const D01 = { x: 210, y: 310 };   // DUMPER-01 approaching blind curve
-  const D02 = { x: 138, y: 195 };   // DUMPER-02 hidden beyond curve
+function getTerrain(road) {
+  const key = road.theta_max + ":" + road.points.length;
+  if (_terrainCanvas && _terrainKey === key) return _terrainCanvas;
+  _terrainCanvas = buildTerrain(road);
+  _terrainKey = key;
+  _roadCache = road;
+  return _terrainCanvas;
+}
 
-  const riskColors = {
-    MONITORING: "#6088a0", LOW: "#9be15d", MEDIUM: "#f1c40f",
-    HIGH: "#e74c3c",        SAFE: "#2ecc71",
-  };
-  const col = riskColors[ov.riskLevel] || "#6088a0";
-
-  /* ── DUMPER-01: expanding safety bubble ── */
-  const bubbleR = 48 + Math.sin(_twinFrame * 0.08) * 6;
+function drawTruck(ctx, v, selected) {
+  const color = VEHICLE_COLORS[v.hazard_status] || "#3fa9f5";
   ctx.save();
-  const halo = ctx.createRadialGradient(D01.x, D01.y, 8, D01.x, D01.y, bubbleR + 14);
-  halo.addColorStop(0,   col + "55");
-  halo.addColorStop(0.6, col + "18");
-  halo.addColorStop(1,   "rgba(0,0,0,0)");
-  ctx.fillStyle = halo;
+  ctx.translate(v.x, v.y);
+  ctx.rotate((v.heading_deg * Math.PI) / 180);
+
+  ctx.fillStyle = "rgba(0,0,0,0.35)";
   ctx.beginPath();
-  ctx.arc(D01.x, D01.y, bubbleR + 14, 0, Math.PI * 2);
+  ctx.ellipse(1, 2, 15, 9, 0, 0, Math.PI * 2);
   ctx.fill();
 
-  ctx.strokeStyle = col;
-  ctx.lineWidth   = ov.riskLevel === "HIGH" ? 2.5 : 1.5;
-  ctx.setLineDash([6, 4]);
-  ctx.beginPath();
-  ctx.arc(D01.x, D01.y, bubbleR, 0, Math.PI * 2);
-  ctx.stroke();
-  ctx.setLineDash([]);
+  ctx.fillStyle = "#111";
+  [[-9, -8], [-9, 8], [6, -8], [6, 8]].forEach(([wx, wy]) => {
+    ctx.beginPath();
+    ctx.arc(wx, wy, 2.6, 0, Math.PI * 2);
+    ctx.fill();
+  });
 
-  // Visual range arc (very short — 8 m visibility)
-  ctx.strokeStyle = "rgba(231,76,60,0.5)";
-  ctx.lineWidth   = 2;
+  ctx.fillStyle = color;
+  ctx.strokeStyle = "#1a1a1a";
+  ctx.lineWidth = 1.4;
   ctx.beginPath();
-  ctx.arc(D01.x, D01.y, 20, -Math.PI * 0.6, -Math.PI * 0.05);
-  ctx.stroke();
-
-  ctx.fillStyle = "rgba(6,10,18,0.85)";
-  ctx.beginPath();
-  ctx.roundRect(D01.x - 44, D01.y - 54, 86, 18, 4);
+  ctx.rect(-13, -7, 17, 14);
   ctx.fill();
-  ctx.fillStyle = col;
-  ctx.font      = "bold 10px Segoe UI";
-  ctx.textAlign = "center";
-  ctx.fillText("DUMPER-01  ← YOU", D01.x - 1, D01.y - 41);
-  ctx.textAlign = "start";
-  ctx.restore();
+  ctx.stroke();
 
-  /* ── V2V animated pulse line ── */
-  if (ov.v2vPulse) {
-    const t = (_twinFrame * 0.05) % 1;
+  ctx.fillStyle = "#2b2f36";
+  ctx.beginPath();
+  ctx.rect(4, -5.5, 9, 11);
+  ctx.fill();
+  ctx.stroke();
 
-    ctx.save();
-    ctx.strokeStyle = "rgba(63,200,255,0.18)";
-    ctx.lineWidth   = 5;
-    ctx.beginPath();
-    ctx.moveTo(D01.x, D01.y);
-    ctx.lineTo(D02.x, D02.y);
-    ctx.stroke();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(0, 0, 19, 0, Math.PI * 2);
+  ctx.stroke();
 
-    ctx.strokeStyle   = "rgba(63,200,255,0.75)";
-    ctx.lineWidth     = 1.8;
-    ctx.setLineDash([5, 7]);
-    ctx.lineDashOffset = -_twinFrame * 0.9;
-    ctx.beginPath();
-    ctx.moveTo(D01.x, D01.y);
-    ctx.lineTo(D02.x, D02.y);
-    ctx.stroke();
-    ctx.setLineDash([]);
-    ctx.lineDashOffset = 0;
-
-    // Travelling packet dot
-    const px = D01.x + (D02.x - D01.x) * t;
-    const py = D01.y + (D02.y - D01.y) * t;
-    ctx.fillStyle = "#3ff0ff";
-    ctx.beginPath();
-    ctx.arc(px, py, 3, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = "rgba(63,240,255,0.25)";
-    ctx.beginPath();
-    ctx.arc(px, py, 7, 0, Math.PI * 2);
-    ctx.fill();
-
-    const mx = (D01.x + D02.x) / 2;
-    const my = (D01.y + D02.y) / 2;
-    ctx.fillStyle = "rgba(6,10,18,0.82)";
-    ctx.beginPath();
-    ctx.roundRect(mx - 18, my - 10, 36, 17, 4);
-    ctx.fill();
-    ctx.fillStyle = "#3ff0ff";
-    ctx.font      = "bold 9px Segoe UI";
-    ctx.textAlign = "center";
-    ctx.fillText("V2V", mx, my + 3);
-    ctx.textAlign = "start";
-    ctx.restore();
-  }
-
-  /* ── DUMPER-02: ghost / hidden vehicle ── */
-  if (ov.hiddenVehicle) {
-    ctx.save();
-    ctx.globalAlpha = 0.38 + Math.sin(_twinFrame * 0.07) * 0.12;
-
-    const ghostGlow = ctx.createRadialGradient(D02.x, D02.y, 4, D02.x, D02.y, 36);
-    ghostGlow.addColorStop(0,   "rgba(231,76,60,0.55)");
-    ghostGlow.addColorStop(0.6, "rgba(231,76,60,0.15)");
-    ghostGlow.addColorStop(1,   "rgba(0,0,0,0)");
-    ctx.fillStyle = ghostGlow;
-    ctx.beginPath();
-    ctx.arc(D02.x, D02.y, 36, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.strokeStyle = "rgba(231,76,60,0.7)";
-    ctx.lineWidth   = 1.5;
+  if (selected) {
+    ctx.strokeStyle = "#ffffff";
+    ctx.lineWidth = 1.6;
     ctx.setLineDash([3, 3]);
     ctx.beginPath();
-    ctx.roundRect(D02.x - 10, D02.y - 6, 20, 12, 3);
+    ctx.arc(0, 0, 25, 0, Math.PI * 2);
     ctx.stroke();
     ctx.setLineDash([]);
-
-    ctx.fillStyle = "rgba(230,180,0,0.45)";
-    ctx.beginPath();
-    ctx.roundRect(D02.x - 10, D02.y - 6, 20, 12, 3);
-    ctx.fill();
-    ctx.globalAlpha = 1.0;
-
-    ctx.strokeStyle = "rgba(63,200,255,0.55)";
-    ctx.lineWidth   = 1.5;
-    ctx.setLineDash([4, 4]);
-    ctx.beginPath();
-    ctx.arc(D02.x, D02.y, 26, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.setLineDash([]);
-
-    ctx.fillStyle = "rgba(6,10,18,0.88)";
-    ctx.beginPath();
-    ctx.roundRect(D02.x - 50, D02.y - 46, 100, 18, 4);
-    ctx.fill();
-    ctx.fillStyle = "rgba(231,76,60,0.95)";
-    ctx.font      = "bold 10px Segoe UI";
-    ctx.textAlign = "center";
-    ctx.fillText("DUMPER-02 ← HIDDEN", D02.x, D02.y - 33);
-    ctx.textAlign = "start";
-    ctx.restore();
   }
-
-  /* ── WARNING CARD: ⚠ HIDDEN VEHICLE DETECTED ── */
-  if (ov.hiddenVehicle && ov.ttc !== null) {
-    const cx = 14, cy = TWIN_H - 160, cw = 215, ch = 92;
-    const pulse = 0.7 + Math.sin(_twinFrame * 0.12) * 0.3;
-
-    ctx.save();
-    ctx.fillStyle = "rgba(6,8,14,0.92)";
-    ctx.beginPath();
-    ctx.roundRect(cx, cy, cw, ch, 8);
-    ctx.fill();
-    ctx.strokeStyle = `rgba(231,76,60,${pulse})`;
-    ctx.lineWidth   = 1.8;
-    ctx.beginPath();
-    ctx.roundRect(cx, cy, cw, ch, 8);
-    ctx.stroke();
-
-    ctx.fillStyle = "#e74c3c";
-    ctx.font      = "bold 11px Segoe UI";
-    ctx.fillText("⚠  HIDDEN VEHICLE DETECTED", cx + 10, cy + 20);
-
-    ctx.strokeStyle = "rgba(231,76,60,0.22)";
-    ctx.lineWidth   = 0.5;
-    ctx.beginPath();
-    ctx.moveTo(cx + 10, cy + 28); ctx.lineTo(cx + cw - 10, cy + 28);
-    ctx.stroke();
-
-    ctx.font      = "10px Segoe UI";
-    ctx.fillStyle = "#8aabbc";
-    ctx.fillText("Vehicle",  cx + 10, cy + 44);
-    ctx.fillText("Distance", cx + 10, cy + 59);
-    ctx.fillText("TTC",      cx + 10, cy + 74);
-
-    ctx.font      = "bold 11px Segoe UI";
-    ctx.fillStyle = "#f0f8ff";
-    ctx.fillText("DUMPER-02", cx + 95, cy + 44);
-    ctx.fillText(`${ov.gap || 42} m`, cx + 95, cy + 59);
-
-    const ttcCol = ov.riskLevel === "HIGH" ? "#e74c3c" : ov.riskLevel === "MEDIUM" ? "#f1c40f" : "#2ecc71";
-    ctx.fillStyle = ttcCol;
-    ctx.fillText(`${ov.ttc} s`, cx + 95, cy + 74);
-    ctx.restore();
-  }
-
-  /* ── SAFE outcome overlay ── */
-  if (ov.riskLevel === "SAFE" && ov.actionTaken) {
-    ctx.save();
-    ctx.fillStyle = "rgba(6,14,10,0.90)";
-    ctx.beginPath();
-    ctx.roundRect(14, TWIN_H - 168, 200, 50, 7);
-    ctx.fill();
-    ctx.strokeStyle = "rgba(46,204,113,0.8)";
-    ctx.lineWidth   = 1.5;
-    ctx.beginPath();
-    ctx.roundRect(14, TWIN_H - 168, 200, 50, 7);
-    ctx.stroke();
-    ctx.font      = "bold 13px Segoe UI";
-    ctx.fillStyle = "#2ecc71";
-    ctx.fillText("✓  RISK RESOLVED", 26, TWIN_H - 148);
-    ctx.font      = "10px Segoe UI";
-    ctx.fillStyle = "#7fc8a0";
-    ctx.fillText("FOGNET: safe passage confirmed", 26, TWIN_H - 130);
-    ctx.restore();
-  }
-}
-
-/* ── Infrastructure labels ── */
-function drawTerrainFeatures(ctx) {
-  drawTower(ctx, 58,  72);
-  drawTower(ctx, TWIN_W - 75, TWIN_H - 92);
-  drawTower(ctx, TWIN_W - 88, 98);
-
-  drawInfraLabel(ctx, 52,  40,  "📍", "Loading Point (LP-1)", "#3fa9f5");
-  drawInfraLabel(ctx, TWIN_W - 106, 40, "🏭", "Crusher",            "#b0c8e0");
-  drawInfraLabel(ctx, TWIN_W - 122, TWIN_H - 52, "📦", "Dumping Area",     "#e67e22");
-  drawInfraLabel(ctx, 38,  TWIN_H - 52, "🗺", "East Ridge",         "#8aaa80");
-  drawInfraLabel(ctx, TWIN_W*0.5 - 52, TWIN_H*0.52 + 60, "⛰", "Hilltop Sector", "#c0a860");
-  drawInfraLabel(ctx, TWIN_W*0.62, TWIN_H*0.28, "✦", "Intersection",     "#ffcc44");
-}
-
-function drawInfraLabel(ctx, x, y, icon, text, color) {
-  ctx.font      = "bold 10px Segoe UI";
-  const tw      = ctx.measureText(text).width;
-  const pw      = tw + 28;
-  ctx.fillStyle = "rgba(6,10,18,0.80)";
-  ctx.beginPath();
-  ctx.roundRect(x, y, pw, 22, 5);
-  ctx.fill();
-  ctx.strokeStyle = color + "55";
-  ctx.lineWidth   = 0.8;
-  ctx.beginPath();
-  ctx.roundRect(x, y, pw, 22, 5);
-  ctx.stroke();
-  // dot
-  ctx.fillStyle = color;
-  ctx.beginPath();
-  ctx.arc(x + 8, y + 11, 3.5, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = "#cce0f0";
-  ctx.fillText(text, x + 16, y + 15);
-}
-
-function drawTower(ctx, x, y) {
-  ctx.strokeStyle = "rgba(160,200,240,0.25)";
-  ctx.lineWidth   = 1.5;
-  ctx.beginPath();
-  ctx.moveTo(x, y);
-  ctx.lineTo(x, y - 32);
-  ctx.stroke();
-  [[y-24, 8],[y-14, 5]].forEach(([cy, hw]) => {
-    ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.moveTo(x - hw, cy); ctx.lineTo(x + hw, cy); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(x - hw, cy); ctx.lineTo(x, cy + 9); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(x + hw, cy); ctx.lineTo(x, cy + 9); ctx.stroke();
-  });
-  const blink = Math.sin(_twinFrame * 0.09) > 0;
-  ctx.fillStyle   = blink ? "rgba(231,76,60,0.85)" : "rgba(231,76,60,0.15)";
-  ctx.shadowColor = blink ? "#e74c3c" : "transparent";
-  ctx.shadowBlur  = blink ? 10 : 0;
-  ctx.beginPath();
-  ctx.arc(x, y - 32, 3.5, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.shadowBlur = 0;
-}
-
-/* ── Compass rose ── */
-function drawCompass(ctx, cx, cy, r) {
-  ctx.save();
-  ctx.fillStyle = "rgba(6,10,18,0.82)";
-  ctx.beginPath();
-  ctx.arc(cx, cy, r + 5, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.strokeStyle = "rgba(255,255,255,0.10)";
-  ctx.lineWidth   = 0.6;
-  ctx.beginPath();
-  ctx.arc(cx, cy, r + 5, 0, Math.PI * 2);
-  ctx.stroke();
-
-  // N pointer (red)
-  ctx.fillStyle = "#e74c3c";
-  ctx.beginPath();
-  ctx.moveTo(cx, cy - r);
-  ctx.lineTo(cx - 5, cy);
-  ctx.lineTo(cx + 5, cy);
-  ctx.closePath();
-  ctx.fill();
-  // S pointer (grey)
-  ctx.fillStyle = "rgba(200,220,240,0.28)";
-  ctx.beginPath();
-  ctx.moveTo(cx, cy + r);
-  ctx.lineTo(cx - 5, cy);
-  ctx.lineTo(cx + 5, cy);
-  ctx.closePath();
-  ctx.fill();
-
-  ctx.font      = "bold 9px Segoe UI";
-  ctx.textAlign = "center";
-  ctx.fillStyle = "#e74c3c";
-  ctx.fillText("N", cx, cy - r - 5);
-  ctx.fillStyle = "rgba(200,220,240,0.45)";
-  ctx.fillText("S", cx, cy + r + 11);
-  ctx.textAlign = "start";
   ctx.restore();
+
+  ctx.fillStyle = "rgba(10,10,8,0.68)";
+  ctx.fillRect(v.x - 30, v.y - 34, 60, 13);
+  ctx.fillStyle = "#f2ead6";
+  ctx.font = "bold 11px Segoe UI";
+  ctx.fillText(v.id, v.x - 27, v.y - 24);
+
+  ctx.fillStyle = "rgba(10,10,8,0.68)";
+  ctx.fillRect(v.x - 24, v.y + 22, 48, 13);
+  ctx.fillStyle = "#dcd2ba";
+  ctx.font = "10px Segoe UI";
+  ctx.fillText(`${v.speed_kmh} km/h`, v.x - 20, v.y + 31);
+}
+
+function drawTwin(ctx, state, opts) {
+  const road = state.road;
+  if (!road) {
+    ctx.clearRect(0, 0, TWIN_W, TWIN_H);
+    return;
+  }
+  opts = opts || {};
+
+  ctx.drawImage(getTerrain(road), 0, 0);
+
+  const globalVis = state.fog ? state.fog.visibility_m : 200;
+  const blindVis = state.fog && state.fog.zones ? state.fog.zones.blind_curve.visibility_m : globalVis;
+
+  // ambient haze across the whole mine
+  const ambientSeverity = Math.max(0, Math.min(1, 1 - globalVis / 190));
+  if (ambientSeverity > 0.03) {
+    ctx.fillStyle = `rgba(210,220,230,${(ambientSeverity * 0.4).toFixed(2)})`;
+    ctx.fillRect(0, 0, TWIN_W, TWIN_H);
+  }
+
+  // extra dense localized cloud over every blind curve — always the foggiest spots
+  road.zones.filter((z) => z.type === "blind_curve").forEach((blindZone) => {
+    const midTheta = (blindZone.theta_start + blindZone.theta_end) / 2;
+    const [bx, by] = pointAtTheta(road, midTheta);
+    const intensity = Math.max(0, Math.min(0.88, 1 - blindVis / 190));
+    if (intensity > 0.03) {
+      const grad = ctx.createRadialGradient(bx, by, 5, bx, by, 130);
+      grad.addColorStop(0, `rgba(232,236,240,${intensity})`);
+      grad.addColorStop(1, "rgba(232,236,240,0)");
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, TWIN_W, TWIN_H);
+    }
+  });
+
+  if (opts.showLinks !== false) {
+    (state.v2v_messages || []).forEach((m) => {
+      const s = state.vehicles[m.sender];
+      const r = state.vehicles[m.receiver];
+      if (!s || !r) return;
+      ctx.strokeStyle = "rgba(63,169,245,0.55)";
+      ctx.lineWidth = 1.4;
+      ctx.setLineDash([4, 4]);
+      ctx.beginPath();
+      ctx.moveTo(s.x, s.y);
+      ctx.lineTo(r.x, r.y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    });
+
+    // V2I connection lines
+    Object.entries(state.v2i || {}).forEach(([vid, info]) => {
+      if (!info.connected || !info.node) return;
+      const v = state.vehicles[vid];
+      const node = road.v2i_nodes.find((n) => n.id === info.node.id);
+      if (!v || !node) return;
+      ctx.strokeStyle = "rgba(46,204,113,0.5)";
+      ctx.lineWidth = 1.2;
+      ctx.setLineDash([2, 5]);
+      ctx.beginPath();
+      ctx.moveTo(v.x, v.y);
+      ctx.lineTo(node.x, node.y - 17);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    });
+  }
+
+  Object.values(state.vehicles || {}).forEach((v) => drawTruck(ctx, v, v.id === opts.selectedId));
 }

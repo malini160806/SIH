@@ -1,10 +1,10 @@
 """
-Vehicle-to-Vehicle (V2V) communication simulation.
+V2V — Vehicle to Vehicle (tier 1 of the V2X topology).
 
-Every tick, each vehicle "broadcasts" its own state. Any other vehicle
-within `comm_range_m` receives it — unless that vehicle's `comm_ok`
-flag is False (simulated communication loss, used by the emergency
-detector / demo mode).
+Every tick, each truck broadcasts its own ID/position/speed/heading/
+phase/hazard status. Any other truck within `comm_range_m` receives it
+— unless that truck's `comm_ok` flag is down (simulated comm loss) or
+V2X has been globally disabled for a demo.
 """
 from __future__ import annotations
 
@@ -19,21 +19,23 @@ class V2VNetwork:
         self.comm_range_m = comm_range_m
         self.last_messages: list[V2VMessage] = []
 
-    def broadcast(self, manager: VehicleManager) -> list[V2VMessage]:
+    def broadcast(self, manager: VehicleManager, v2x_enabled: bool) -> list[V2VMessage]:
         messages: list[V2VMessage] = []
+        if not v2x_enabled:
+            self.last_messages = messages
+            return messages
+
         for sender_id, sender in manager.vehicles.items():
             if not sender.comm_ok:
                 continue
             for receiver_id, receiver in manager.vehicles.items():
                 if receiver_id == sender_id:
                     continue
-                gap = self.road.gap_ahead(receiver.s, sender.s)
+                gap = self.road.road_distance(receiver.theta, sender.theta)
                 if gap > self.comm_range_m:
                     continue
-                text = (
-                    f"Vehicle ahead at {gap:.0f} m, "
-                    f"speed {sender.speed_kmh:.0f} km/h"
-                )
+                relation = "opposite direction" if sender.direction_sign * receiver.direction_sign < 0 else "same direction"
+                text = f"{sender.phase.replace('_', ' ').title()}, {gap:.0f} m away, {relation}, {sender.speed_kmh:.0f} km/h"
                 messages.append(
                     V2VMessage(
                         sender=sender_id,
@@ -44,7 +46,7 @@ class V2VNetwork:
                             "y": sender.y,
                             "speed_kmh": sender.speed_kmh,
                             "heading_deg": sender.heading_deg,
-                            "accel_mps2": sender.accel_mps2,
+                            "phase": sender.phase,
                             "hazard_status": sender.hazard_status,
                         },
                     )

@@ -1,9 +1,8 @@
-"""mmWave radar simulation.
+"""77 GHz mmWave radar simulation.
 
-Real mmWave radar (e.g. TI IWR6843) reports object range and Doppler
-(relative velocity) largely unaffected by fog. We simulate the same
-contract: within `radar_range_m` the vehicle ahead is detected with a
-small amount of measurement noise; beyond that, nothing is seen.
+Radar answers exactly one question: HOW FAR IS THE OBJECT? It reports
+detection + range + closing speed, and nothing about bearing or
+identity — that separation is deliberate and matches the real sensor.
 """
 from __future__ import annotations
 

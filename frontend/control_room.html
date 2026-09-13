@@ -10,9 +10,12 @@
 <header class="top-bar">
   <div>
     <h1>FOGNET CONTROL CENTRE</h1>
-    <div class="subtitle">AI-Based Cooperative Perception &amp; Haulage Safety Network</div>
+    <div class="subtitle">Predictive &amp; Cooperative Fog Intelligence — Open-Pit Haulage Safety</div>
   </div>
   <div class="controls">
+    <button id="pause-btn">⏸ Pause</button>
+    <button id="reset-btn">⟲ Reset</button>
+    <button id="demo-btn" class="demo-btn">▶ DEMO MODE</button>
     <select id="fog-select">
       <option value="CLEAR">Fog: Clear</option>
       <option value="LIGHT">Fog: Light</option>
@@ -20,24 +23,23 @@
       <option value="HEAVY">Fog: Heavy</option>
       <option value="EXTREME">Fog: Extreme</option>
     </select>
-    <button id="fog-auto-btn">Auto-Deteriorate: OFF</button>
-    <button id="demo-btn" class="demo-btn">&#9654; DEMO MODE</button>
-    <button id="demo-reset-btn" class="demo-btn">&#8635; RESET DEMO</button>
-    <button id="export-logs-btn" class="demo-btn">&#128229; Export Logs</button>
-    <div class="tick-rate-control">
-      <label for="tick-rate-slider">Demo speed:</label>
-      <input id="tick-rate-slider" type="range" min="0.05" max="2" step="0.05" value="0.1">
-      <span id="tick-rate-value">0.1&#8239;s/tick</span>
-    </div>
-    <a href="/driver" target="_blank"><button>Open Driver View</button></a>
+    <button id="fog-auto-btn">Auto-Fog: OFF</button>
+    <select id="sim-speed-select">
+      <option value="0.5">Speed: 0.5x</option>
+      <option value="1" selected>Speed: 1x</option>
+      <option value="2">Speed: 2x</option>
+      <option value="4">Speed: 4x</option>
+    </select>
+    <button id="gps-denied-btn">GPS-Denied: OFF</button>
+    <button id="v2x-btn">V2X: ON</button>
+    <button id="links-btn">Links: ON</button>
   </div>
 </header>
 
 <main class="layout">
-  <!-- LEFT: Map + Fleet table + V2V log -->
   <section>
     <div class="panel" id="twin-wrap">
-      <h2>Digital Twin — Mine Haul Loop</h2>
+      <h2>Digital Twin — Spiral Open-Pit Haul Network</h2>
       <canvas id="twin-canvas"></canvas>
       <div class="demo-banner" id="demo-banner">
         <span class="step-title" id="demo-step-title"></span>
@@ -46,103 +48,55 @@
     </div>
 
     <div class="panel">
-      <h2>Fleet Vehicles</h2>
+      <h2>Fleet Status <span class="hint">(click a truck on the map to inspect it)</span></h2>
       <table class="vehicle-table">
-        <thead><tr><th>Vehicle</th><th>Speed</th><th>Recommended</th><th>Zone</th><th>Status</th></tr></thead>
+        <thead><tr><th>Vehicle</th><th>Speed</th><th>Bench</th><th>GPS</th><th>V2X</th><th>Status</th></tr></thead>
         <tbody id="vehicle-rows"></tbody>
       </table>
     </div>
 
     <div class="panel">
-      <h2>V2V Communication Log</h2>
-      <div class="msg-log" id="v2v-log"></div>
+      <h2>Emergency Alerts</h2>
+      <div id="emergency-list"><div class="label">No active emergencies</div></div>
     </div>
   </section>
 
-  <!-- RIGHT: RISK → ACTION panel -->
-  <section id="right-panel">
-
-    <!-- TOP: Visibility dual readout -->
-    <div class="panel" id="vis-panel">
-      <h2>Visibility Status</h2>
-      <div class="vis-dual-row">
-        <div class="vis-dual-card eye">
-          <div class="vis-dual-icon">👁</div>
-          <div class="vis-dual-val" id="vis-visual">--</div>
-          <div class="vis-dual-lbl">Visual (Driver)</div>
-        </div>
-        <div class="vis-dual-sep">→</div>
-        <div class="vis-dual-card fognet">
-          <div class="vis-dual-icon">📡</div>
-          <div class="vis-dual-val" id="vis-virtual">--</div>
-          <div class="vis-dual-lbl">Virtual (FOGNET)</div>
-        </div>
-      </div>
-      <div class="vis-gauge-wrap">
-        <canvas id="vis-gauge-canvas" width="300" height="90"></canvas>
-      </div>
-    </div>
-
-    <!-- RISK CARD -->
-    <div class="panel risk-action-panel" id="risk-action-panel">
-      <div class="ra-risk-header" id="ra-risk-header">
-        <div class="ra-risk-level" id="ra-risk-level">MONITORING</div>
-        <div class="ra-ttc" id="ra-ttc">TTC: — s</div>
-      </div>
-
-      <div class="ra-why" id="ra-why">
-        <div class="ra-why-title">SITUATION</div>
-        <ul id="ra-why-list">
-          <li>All vehicles clear</li>
-          <li>Normal visibility</li>
-        </ul>
-      </div>
-
-      <div class="ra-recommend" id="ra-recommend">
-        <div class="ra-recommend-label">FOGNET RECOMMENDATION</div>
-        <div class="ra-recommend-action" id="ra-recommend-action">— NORMAL OPERATIONS —</div>
-      </div>
-
-      <!-- Prediction flow -->
-      <div class="ra-prediction" id="ra-prediction">
-        <div class="ra-pred-row" id="ra-pred-no-action"></div>
-        <div class="ra-pred-row safe-row" id="ra-pred-action"></div>
-      </div>
-
-      <!-- Apply button -->
-      <button class="ra-apply-btn" id="ra-apply-btn" style="display:none;">
-        ⚡ APPLY / SIMULATE RESPONSE
-      </button>
-
-      <!-- Post-action outcome -->
-      <div class="ra-outcome" id="ra-outcome" style="display:none;">
-        <div class="ra-outcome-speed" id="ra-outcome-speed">22 km/h</div>
-        <div class="ra-outcome-arrow">↓</div>
-        <div class="ra-outcome-result" id="ra-outcome-result">Slowing...</div>
-      </div>
-    </div>
-
-    <!-- Fog forecast (appears at end of demo) -->
-    <div class="panel fog-forecast-panel" id="fog-forecast-panel" style="display:none;">
-      <h2>⛈ Fog Forecast</h2>
-      <div class="ff-warning">Visibility expected <strong>&lt; 5 m</strong> in 10 min</div>
-      <div class="ff-ai-title">AI RECOMMENDATION</div>
-      <ul class="ff-actions">
-        <li>🔴 Hold 2 vehicles at Loading Area</li>
-        <li>🟡 Redirect DUMPER-03 to Route B</li>
-        <li>🟢 Maintain safe ore flow on Route C</li>
-      </ul>
-      <button class="ra-apply-btn" style="background:linear-gradient(90deg,#1a4a22,#2a7a3a);" onclick="document.getElementById('fog-forecast-panel').style.display='none'">
-        ✓ ACCEPT &amp; APPLY
-      </button>
-    </div>
-
-    <!-- Sensor Fusion (compact) -->
+  <section>
     <div class="panel">
-      <h2>Sensor Fusion</h2>
-      <div id="fusion-cards"></div>
+      <h2 id="detail-title">Vehicle Detail — select a truck</h2>
+      <div id="vehicle-detail" class="detail-grid"></div>
     </div>
 
+    <div class="panel">
+      <h2>Sensor Status <span class="hint">(selected truck)</span></h2>
+      <div id="sensor-panel"></div>
+    </div>
+
+    <div class="panel">
+      <h2>V2X — Multi-Tier Communication</h2>
+      <div id="v2x-chain" class="v2x-chain"></div>
+      <div class="msg-log" id="v2v-log"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Fog &amp; Visibility</h2>
+      <div class="big-readout">
+        <div>
+          <div class="value" id="visibility-value">--</div>
+          <div class="label">Global Visibility (m)</div>
+        </div>
+        <div>
+          <div class="value" id="fog-status-value">--</div>
+          <div class="label">Fog Status</div>
+        </div>
+      </div>
+      <div id="fog-zones" class="fog-zones"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Collision Risk / TTC <span class="hint">(selected truck)</span></h2>
+      <div id="risk-card"></div>
+    </div>
   </section>
 </main>
 

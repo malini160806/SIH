@@ -1,442 +1,313 @@
-/**
- * control_room.js
- * Drives the FOGNET Control Centre:
- *   - WebSocket state rendering
- *   - Visibility gauge
- *   - RISK → ACTION panel with live demo state machine
- *   - 12-step demo scenario (blind curve / hidden vehicle / TTC / resolution)
- */
-
-/* ── canvas setup ── */
 const canvas = document.getElementById("twin-canvas");
-const ctx    = initTwinCanvas(canvas);
+const ctx = initTwinCanvas(canvas);
 
-const connDot  = document.getElementById("conn-dot");
+const connDot = document.getElementById("conn-dot");
 const connText = document.getElementById("conn-text");
 
-/* ═══════════════════════════════════════════════════════════
-   DEMO STATE MACHINE
-   12 steps that play automatically when DEMO MODE is active.
-   Each step mutates _demoState which drives the right panel
-   and the map overlay in twin.js.
-═══════════════════════════════════════════════════════════ */
-const _demoState = {
-  active:         false,
-  step:           0,
-  stepStartedAt:  0,
-  visVisual:      200,   // driver's eye visibility
-  visVirtual:     200,   // FOGNET virtual visibility (via sensor fusion)
-  riskLevel:      "MONITORING",
-  ttc:            null,
-  speed:          22,
-  recommendedSpeed: 22,
-  whyReasons:     ["All vehicles clear", "Normal visibility"],
-  recommendAction:"— NORMAL OPERATIONS —",
-  predNoAction:   null,
-  predAction:     null,
-  showApply:      false,
-  actionTaken:    false,
-  outcome:        null,
-  showForecast:   false,
-  // Map overlay data (read by twin.js via window._fognetOverlay)
-  overlay: {
-    active:           false,
-    d01x: 0, d01y: 0,
-    d02x: 0, d02y: 0,
-    ttc:              null,
-    gap:              null,
-    riskLevel:        "MONITORING",
-    v2vPulse:         false,
-    hiddenVehicle:    false,
-    actionTaken:      false,
-  },
-};
+let cachedRoad = null;
+let latestState = null;
+let selectedId = null;
+let showLinks = true;
 
-/* Expose overlay to twin.js */
-window._fognetOverlay = _demoState.overlay;
+fetch("/api/road")
+  .then((r) => r.json())
+  .then((road) => (cachedRoad = road));
 
-/* Step durations in ms */
-const STEP_DUR = 2500;
-
-const DEMO_STEPS = [
-  // 0: baseline
-  {
-    vis: 200, visV: 400, risk: "MONITORING", ttc: null, speed: 22, recSpeed: 22,
-    why: ["Normal visibility","All vehicles clear","V2V active"],
-    rec: "— NORMAL OPERATIONS —", predNo: null, predYes: null,
-    showApply: false, overlay: { active: false },
-  },
-  // 1: fog starts
-  {
-    vis: 50, visV: 300, risk: "MONITORING", ttc: null, speed: 22, recSpeed: 22,
-    why: ["Fog forming — 50 m","V2V active","Monitoring DUMPER-01 route"],
-    rec: "⚠ Monitor curve approach",predNo: null, predYes: null,
-    showApply: false, overlay: { active: false },
-  },
-  // 2: fog heavier
-  {
-    vis: 20, visV: 200, risk: "LOW", ttc: null, speed: 22, recSpeed: 20,
-    why: ["Visibility: 20 m","Blind curve ahead","DUMPER-02 beyond curve"],
-    rec: "↓ Reduce speed to 20 km/h", predNo: null, predYes: null,
-    showApply: false, overlay: { active: true, hiddenVehicle: false, v2vPulse: false },
-  },
-  // 3: dense fog, DUMPER-02 hidden
-  {
-    vis: 8, visV: 75, risk: "MEDIUM", ttc: 6.2, speed: 22, recSpeed: 16,
-    why: ["Visibility: 8 m","Blind curve — DUMPER-02 hidden","FOGNET V2V detects DUMPER-02","Closing speed: 7.2 m/s"],
-    rec: "↓ Reduce speed to 16 km/h",
-    predNo: "If no action: TTC 6.2 s → 4.1 s → CRITICAL",
-    predYes: "If action taken: TTC 6.2 s → 8.0 s → SAFE",
-    showApply: true,
-    overlay: { active: true, hiddenVehicle: true, v2vPulse: true, gap: 55, ttc: 6.2, riskLevel: "MEDIUM" },
-  },
-  // 4: TTC decreasing
-  {
-    vis: 8, visV: 75, risk: "HIGH", ttc: 4.8, speed: 22, recSpeed: 12,
-    why: ["Visibility: 8 m","Blind curve","DUMPER-02 closing — 42 m","Relative speed: 7.2 m/s"],
-    rec: "↓ REDUCE SPEED TO 12 km/h",
-    predNo: "If no action: TTC 4.8 s → 3.1 s → CRITICAL",
-    predYes: "If action taken: TTC 4.8 s → 6.2 s → SAFE",
-    showApply: true,
-    overlay: { active: true, hiddenVehicle: true, v2vPulse: true, gap: 42, ttc: 4.8, riskLevel: "HIGH" },
-  },
-  // 5: critical threshold
-  {
-    vis: 8, visV: 75, risk: "HIGH", ttc: 4.1, speed: 22, recSpeed: 12,
-    why: ["Visibility: 8 m","DUMPER-02 — 38 m","TTC CRITICAL","FOGNET: BRAKE COMMAND"],
-    rec: "🛑 REDUCE SPEED TO 12 km/h — IMMEDIATE",
-    predNo: "If no action: COLLISION in 4.1 s",
-    predYes: "APPLY NOW → TTC will recover",
-    showApply: true,
-    overlay: { active: true, hiddenVehicle: true, v2vPulse: true, gap: 38, ttc: 4.1, riskLevel: "HIGH" },
-  },
-  // 6: action applied — speed starts dropping
-  {
-    vis: 8, visV: 75, risk: "MEDIUM", ttc: 5.0, speed: 18, recSpeed: 12,
-    why: ["Speed reducing: 22 → 18 km/h","FOGNET command applied","Monitoring TTC recovery"],
-    rec: "Slowing to 12 km/h...",
-    predNo: null, predYes: "TTC recovering → 5.0 s",
-    showApply: false, actionTaken: true,
-    outcome: { speed: "18 km/h", result: "Slowing..." },
-    overlay: { active: true, hiddenVehicle: true, v2vPulse: true, gap: 42, ttc: 5.0, riskLevel: "MEDIUM", actionTaken: true },
-  },
-  // 7: speed at 12, TTC recovering
-  {
-    vis: 8, visV: 75, risk: "LOW", ttc: 6.2, speed: 12, recSpeed: 12,
-    why: ["Speed: 12 km/h — target reached","TTC recovering","DUMPER-02 visible to FOGNET"],
-    rec: "✓ Maintain 12 km/h through curve",
-    predNo: null, predYes: "TTC 6.2 s — improving",
-    showApply: false, actionTaken: true,
-    outcome: { speed: "12 km/h", result: "TTC recovering ↑" },
-    overlay: { active: true, hiddenVehicle: false, v2vPulse: true, gap: 52, ttc: 6.2, riskLevel: "LOW", actionTaken: true },
-  },
-  // 8: SAFE
-  {
-    vis: 8, visV: 75, risk: "SAFE", ttc: 8.5, speed: 12, recSpeed: 12,
-    why: ["Speed: 12 km/h","TTC: 8.5 s — safe margin","Cooperative perception maintained"],
-    rec: "✓ RISK RESOLVED — Safe passage",
-    predNo: null, predYes: null,
-    showApply: false, actionTaken: true,
-    outcome: { speed: "12 km/h", result: "✓ SAFE" },
-    overlay: { active: true, hiddenVehicle: false, v2vPulse: true, gap: 62, ttc: 8.5, riskLevel: "SAFE", actionTaken: true },
-  },
-  // 9: Fog forecast + AI recommendation
-  {
-    vis: 8, visV: 75, risk: "SAFE", ttc: 8.5, speed: 12, recSpeed: 12,
-    why: ["Fog forecast: < 5 m in 10 min","AI routing analysis complete"],
-    rec: "AI FLEET RECOMMENDATION READY",
-    predNo: null, predYes: null,
-    showApply: false, showForecast: true,
-    overlay: { active: true, hiddenVehicle: false, v2vPulse: false, gap: 65, ttc: 8.5, riskLevel: "SAFE", actionTaken: true },
-  },
-];
-
-let _demoStepIndex = 0;
-let _demoTimer = null;
-let _demoRunning = false;
-let _actionApplied = false;
-
-function startDemoSequence() {
-  _demoRunning   = true;
-  _actionApplied = false;
-  _demoStepIndex = 0;
-  applyDemoStep(0);
+function fmtTime(ts) {
+  return new Date(ts * 1000).toLocaleTimeString();
 }
 
-function stopDemoSequence() {
-  _demoRunning = false;
-  clearTimeout(_demoTimer);
-  applyDemoStep(0); // reset to baseline
-}
-
-function applyDemoStep(idx) {
-  if (idx >= DEMO_STEPS.length) {
-    _demoRunning = false;
-    return;
+function animateTwin() {
+  if (latestState && cachedRoad) {
+    latestState.road = cachedRoad;
+    drawTwin(ctx, latestState, { selectedId, showLinks });
   }
-  _demoStepIndex = idx;
-  const step = DEMO_STEPS[idx];
+  requestAnimationFrame(animateTwin);
+}
+requestAnimationFrame(animateTwin);
 
-  // Update visibility readouts
-  document.getElementById("vis-visual").textContent  = step.vis  + " m";
-  document.getElementById("vis-virtual").textContent = step.visV + " m";
+// ---- click-to-select a truck on the map
+canvas.addEventListener("click", (evt) => {
+  if (!latestState) return;
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+  const cx = (evt.clientX - rect.left) * scaleX;
+  const cy = (evt.clientY - rect.top) * scaleY;
 
-  // Apply colour to virtual readout
-  const virtEl = document.getElementById("vis-virtual");
-  virtEl.className = "vis-dual-val fognet-val";
-  const visEl  = document.getElementById("vis-visual");
-  visEl.style.color = step.vis < 20 ? "#e74c3c" : step.vis < 60 ? "#e67e22" : "#2ecc71";
-
-  // Update risk panel
-  updateRiskPanel(step);
-
-  // Update map overlay
-  Object.assign(window._fognetOverlay, { active: false, hiddenVehicle: false, v2vPulse: false, actionTaken: false });
-  if (step.overlay) Object.assign(window._fognetOverlay, step.overlay);
-
-  // Forecast panel
-  const fpanel = document.getElementById("fog-forecast-panel");
-  if (step.showForecast) fpanel.style.display = "block";
-
-  // Draw gauge
-  drawVisGauge(step.vis, step.vis < 30 ? "EXTREME" : step.vis < 60 ? "HEAVY" : step.vis < 100 ? "MEDIUM" : step.vis < 150 ? "LIGHT" : "CLEAR");
-
-  // Schedule next step (unless waiting for user action at HIGH risk)
-  if (_demoRunning && idx < DEMO_STEPS.length - 1) {
-    const waitForAction = step.showApply && step.risk === "HIGH" && !_actionApplied;
-    if (!waitForAction) {
-      _demoTimer = setTimeout(() => applyDemoStep(idx + 1), STEP_DUR);
+  let best = null,
+    bestDist = 26;
+  Object.values(latestState.vehicles).forEach((v) => {
+    const d = Math.hypot(v.x - cx, v.y - cy);
+    if (d < bestDist) {
+      bestDist = d;
+      best = v.id;
     }
-  }
-}
-
-function updateRiskPanel(step) {
-  const riskColors = {
-    MONITORING: "#6088a0", LOW: "#9be15d", MEDIUM: "#f1c40f",
-    HIGH: "#e74c3c", SAFE: "#2ecc71",
-  };
-  const col = riskColors[step.risk] || "#6088a0";
-
-  // Header
-  const header = document.getElementById("ra-risk-header");
-  header.style.borderColor = col;
-  header.style.background  = col + "15";
-  document.getElementById("ra-risk-level").textContent = step.risk;
-  document.getElementById("ra-risk-level").style.color = col;
-  document.getElementById("ra-ttc").textContent = step.ttc ? `TTC: ${step.ttc} s` : "TTC: — s";
-  document.getElementById("ra-ttc").style.color = col;
-
-  // Flash panel on HIGH
-  const panel = document.getElementById("risk-action-panel");
-  panel.className = step.risk === "HIGH"
-    ? "panel risk-action-panel risk-high-pulse"
-    : "panel risk-action-panel";
-
-  // WHY list
-  const list = document.getElementById("ra-why-list");
-  list.innerHTML = (step.why || []).map(r => `<li>${r}</li>`).join("");
-
-  // Recommendation
-  document.getElementById("ra-recommend-action").textContent  = step.recommendAction || step.rec || "—";
-  document.getElementById("ra-recommend-action").style.color  = col;
-
-  // Prediction rows
-  const predNo  = document.getElementById("ra-pred-no-action");
-  const predYes = document.getElementById("ra-pred-action");
-  predNo.textContent  = step.predNo  || "";
-  predYes.textContent = step.predYes || "";
-  predNo.style.display  = step.predNo  ? "block" : "none";
-  predYes.style.display = step.predYes ? "block" : "none";
-
-  // Apply button
-  const applyBtn = document.getElementById("ra-apply-btn");
-  applyBtn.style.display = (step.showApply && !_actionApplied) ? "block" : "none";
-
-  // Outcome
-  const outcomeEl = document.getElementById("ra-outcome");
-  if (step.outcome) {
-    outcomeEl.style.display = "flex";
-    document.getElementById("ra-outcome-speed").textContent  = step.outcome.speed;
-    document.getElementById("ra-outcome-result").textContent = step.outcome.result;
-    document.getElementById("ra-outcome-result").style.color = col;
-  } else {
-    outcomeEl.style.display = "none";
-  }
-}
-
-/* Apply / Simulate button click */
-document.getElementById("ra-apply-btn").addEventListener("click", () => {
-  _actionApplied = true;
-  document.getElementById("ra-apply-btn").style.display = "none";
-
-  // Animate speed: 22 → 18 → 12
-  const steps = [
-    { label: "22 km/h → 18 km/h", delay: 0 },
-    { label: "18 km/h → 12 km/h", delay: 900 },
-    { label: "✓ 12 km/h reached", delay: 1800 },
-  ];
-  const speedEl  = document.getElementById("ra-outcome-speed");
-  const resultEl = document.getElementById("ra-outcome-result");
-  document.getElementById("ra-outcome").style.display = "flex";
-  steps.forEach(({ label, delay }) => {
-    setTimeout(() => { speedEl.textContent = label; }, delay);
   });
-  setTimeout(() => {
-    resultEl.textContent = "TTC improving ↑";
-    resultEl.style.color = "#2ecc71";
-  }, 2000);
-
-  // Advance demo from step 6 onward
-  clearTimeout(_demoTimer);
-  setTimeout(() => { applyDemoStep(6); }, 2200);
+  if (best) {
+    selectedId = best;
+    renderSelection(latestState);
+  }
 });
 
-/* ═══════════════════════════════════════════════════════════
-   VISIBILITY GAUGE (small, horizontal bar)
-═══════════════════════════════════════════════════════════ */
-function drawVisGauge(visibility, fogStatus) {
-  const c = document.getElementById("vis-gauge-canvas");
-  if (!c) return;
-  const g  = c.getContext("2d");
-  const W  = c.width;
-  const H  = c.height;
-  g.clearRect(0, 0, W, H);
-
-  const MAX = 200;
-  const pct = Math.min(visibility / MAX, 1);
-  const barW = W - 24;
-  const barH = 14;
-  const bx   = 12;
-  const by   = H / 2 - barH / 2;
-
-  // Track
-  g.fillStyle = "rgba(255,255,255,0.06)";
-  g.beginPath();
-  g.roundRect(bx, by, barW, barH, 7);
-  g.fill();
-
-  // Zones
-  const zones = [
-    { to: 0.15, c: "#e74c3c" },
-    { to: 0.30, c: "#e67e22" },
-    { to: 0.50, c: "#f1c40f" },
-    { to: 0.75, c: "#9be15d" },
-    { to: 1.00, c: "#2ecc71" },
-  ];
-  let prev = 0;
-  zones.forEach(z => {
-    g.fillStyle = z.c + "44";
-    g.beginPath();
-    g.roundRect(bx + prev * barW, by, (z.to - prev) * barW, barH, 0);
-    g.fill();
-    prev = z.to;
-  });
-
-  // Active fill
-  let activeCol = "#2ecc71";
-  if (visibility < 30)  activeCol = "#e74c3c";
-  else if (visibility < 60)  activeCol = "#e67e22";
-  else if (visibility < 100) activeCol = "#f1c40f";
-  else if (visibility < 150) activeCol = "#9be15d";
-
-  g.fillStyle = activeCol;
-  g.beginPath();
-  g.roundRect(bx, by, pct * barW, barH, 7);
-  g.fill();
-
-  // Needle
-  const nx = bx + pct * barW;
-  g.fillStyle = "#fff";
-  g.beginPath();
-  g.arc(nx, by + barH / 2, 5, 0, Math.PI * 2);
-  g.fill();
-
-  // Labels
-  g.textAlign = "center";
-  g.font = "9px Segoe UI";
-  g.fillStyle = "rgba(200,220,240,0.5)";
-  ["0", "50", "100", "150", "200"].forEach((lbl, i) => {
-    g.fillText(lbl, bx + (i * 0.25) * barW, by + barH + 14);
-  });
-  // Value
-  g.font = "bold 11px Segoe UI";
-  g.fillStyle = activeCol;
-  g.fillText(visibility + " m", bx + pct * barW, by - 6);
-  g.textAlign = "start";
-}
-
-/* ═══════════════════════════════════════════════════════════
-   WEBSOCKET STATE RENDERING
-═══════════════════════════════════════════════════════════ */
 function render(state) {
-  drawTwin(ctx, state);
-  renderVehicleTable(state);
-  renderFusion(state);
-  renderV2VLog(state);
-
-  // If demo is NOT running, show live fog data in gauge
-  if (!_demoRunning) {
-    drawVisGauge(state.fog.visibility_m, state.fog.status);
-    document.getElementById("vis-visual").textContent  = state.fog.visibility_m + " m";
-    document.getElementById("vis-virtual").textContent = (state.fog.visibility_m * 2) + " m";
-  }
+  latestState = state;
+  renderFleetTable(state);
+  renderFog(state);
+  renderV2X(state);
+  renderEmergencies(state);
+  renderDemo(state);
+  renderSelection(state);
 
   document.getElementById("tick-info").textContent =
-    `tick ${state.tick} · ${new Date(state.timestamp * 1000).toLocaleTimeString()}`;
+    `tick ${state.tick} · ${new Date(state.timestamp * 1000).toLocaleTimeString()}` +
+    (state.paused ? " · PAUSED" : "");
 
-  const autoBtn = document.getElementById("fog-auto-btn");
-  autoBtn.textContent = `Auto-Deteriorate: ${state.fog.auto_mode ? "ON" : "OFF"}`;
+  document.getElementById("fog-auto-btn").textContent = `Auto-Fog: ${state.fog.auto_mode ? "ON" : "OFF"}`;
+  document.getElementById("gps-denied-btn").textContent = `GPS-Denied: ${state.gps_force_denied ? "ON" : "OFF"}`;
+  document.getElementById("gps-denied-btn").classList.toggle("active", state.gps_force_denied);
+  document.getElementById("v2x-btn").textContent = `V2X: ${state.v2x_enabled ? "ON" : "OFF"}`;
+  document.getElementById("pause-btn").textContent = state.paused ? "▶ Resume" : "⏸ Pause";
 }
 
-function renderVehicleTable(state) {
+function v2cLookup(state, vid) {
+  return (state.v2c.vehicles || []).find((v) => v.id === vid) || {};
+}
+
+function renderFleetTable(state) {
   const tbody = document.getElementById("vehicle-rows");
   tbody.innerHTML = "";
   Object.values(state.vehicles).forEach((v) => {
-    const rec = state.recommended_speed[v.id];
-    const tr  = document.createElement("tr");
+    const pos = state.positioning[v.id] || {};
+    const c = v2cLookup(state, v.id);
+    const gpsLabel = pos.mode === "DEAD_RECKONING" ? "DEAD RECK." : "RTK";
+    const tr = document.createElement("tr");
+    tr.className = v.id === selectedId ? "row-selected" : "";
     tr.innerHTML = `
       <td>${v.id}</td>
       <td>${v.speed_kmh} km/h</td>
-      <td>${rec} km/h</td>
-      <td>${v.zone_name}</td>
+      <td>${v.bench}</td>
+      <td><span class="pill ${pos.mode === "DEAD_RECKONING" ? "pill-warn" : "pill-ok"}">${gpsLabel}</span></td>
+      <td><span class="pill ${c.v2x_status === "CONNECTED" ? "pill-ok" : "pill-warn"}">${c.v2x_status || "--"}</span></td>
       <td><span class="badge ${v.hazard_status}">${v.hazard_status}</span></td>
     `;
+    tr.addEventListener("click", () => {
+      selectedId = v.id;
+      renderSelection(latestState);
+    });
     tbody.appendChild(tr);
   });
 }
 
-function renderFusion(state) {
-  const container = document.getElementById("fusion-cards");
-  if (!container) return;
-  container.innerHTML = "";
-  Object.entries(state.fusion || {}).forEach(([vid, f]) => {
-    const div = document.createElement("div");
-    div.className = "fusion-card";
-    const sensors = ["radar", "thermal", "v2v", "gps"];
-    const tags = sensors
-      .map(s => `<span class="${f.contributing_sensors.includes(s) ? "on" : ""}">${s.toUpperCase()}</span>`)
-      .join("");
-    div.innerHTML = `
-      <b>${vid}</b> ${f.detected ? `→ ${f.target_id} @ ${f.distance_m} m` : "(no detection)"}
-      &nbsp;<span class="conf-${f.confidence}">${f.confidence}</span>
-      <div class="sensor-tags">${tags}</div>
-    `;
-    container.appendChild(div);
-  });
+function renderFog(state) {
+  document.getElementById("visibility-value").textContent = `${state.fog.visibility_m} m`;
+  const statusEl = document.getElementById("fog-status-value");
+  statusEl.textContent = state.fog.status;
+  statusEl.className = `value fog-status-${state.fog.status}`;
+
+  const zonesEl = document.getElementById("fog-zones");
+  const labels = { dumping: "Dumping", bench_road: "Bench Road", ramp: "Ramp", blind_curve: "Blind Curve", sharp_curve: "Sharp Curve", intersection: "Intersection", loading: "Loading" };
+  zonesEl.innerHTML = Object.entries(state.fog.zones || {})
+    .map(([type, z]) => `<div class="zone-row"><span>${labels[type] || type}</span><span class="fog-status-${z.status}">${z.visibility_m} m · ${z.status}</span></div>`)
+    .join("");
 }
 
-function renderV2VLog(state) {
-  const log  = document.getElementById("v2v-log");
-  const msgs = state.v2v_messages || [];
-  log.innerHTML = msgs
-    .map(m => `<div class="msg"><b>${m.sender} → ${m.receiver}</b><br>"${m.text}"</div>`)
-    .join("") || '<div class="label">No V2V traffic in range.</div>';
+function renderV2X(state) {
+  document.getElementById("v2v-log").innerHTML =
+    (state.v2v_messages || []).map((m) => `<div class="msg"><b>${m.sender} → ${m.receiver}</b><br>"${m.text}"</div>`).join("") ||
+    '<div class="label">No V2V traffic in range.</div>';
 }
 
-/* ── Controls ── */
-document.getElementById("fog-select").addEventListener("change", e => {
-  fetch(`/api/fog/${e.target.value}`, { method: "POST" });
-});
+function renderEmergencies(state) {
+  const list = document.getElementById("emergency-list");
+  const events = state.emergency_events || [];
+  if (!events.length) {
+    list.innerHTML = '<div class="label">No active emergencies</div>';
+    return;
+  }
+  list.innerHTML = events
+    .slice(0, 8)
+    .map((e) => `<div class="alert-banner"><b>${e.type.replace("_", " ")}</b> — ${e.vehicle_id}<br>${e.status} @ ${e.location} (${fmtTime(e.timestamp)})</div>`)
+    .join("");
+}
+
+function renderDemo(state) {
+  const banner = document.getElementById("demo-banner");
+  const demoBtn = document.getElementById("demo-btn");
+  if (state.demo && state.demo.active) {
+    banner.classList.add("show");
+    document.getElementById("demo-step-title").textContent = `${state.demo.step_title} (${state.demo.step_index}/${state.demo.step_count})`;
+    document.getElementById("demo-step-desc").textContent = state.demo.step_description;
+    demoBtn.textContent = "■ STOP DEMO";
+    demoBtn.classList.add("active");
+  } else {
+    banner.classList.remove("show");
+    demoBtn.textContent = "▶ DEMO MODE";
+    demoBtn.classList.remove("active");
+  }
+}
+
+function row(label, value) {
+  return `<div class="detail-row"><span class="dl">${label}</span><span class="dv">${value}</span></div>`;
+}
+
+// Live "approaching/in/through a bend" advisory — every field here comes
+// straight from the existing zone/speed-advisor/risk/fusion state, never
+// a separate fake curve system.
+function curveAdvisoryHtml(v, recommendedSpeed, risk, fusion) {
+  const isBlind = v.zone_type === "blind_curve";
+  const isCurve = isBlind || v.zone_type === "sharp_curve";
+  if (!isCurve) return "";
+
+  const hazard = isBlind && !!risk.other_id;
+  const sawV2V = hazard && (fusion.contributing_sensors || []).includes("v2v");
+
+  return `
+    <div class="curve-advisory ${isBlind ? "curve-blind" : "curve-sharp"}">
+      <div class="curve-advisory-title">${isBlind ? "⚠️ BLIND CURVE" : "↩️ SHARP BEND"} — ${v.zone_name.toUpperCase()}</div>
+      <div class="detail-row"><span class="dl">Curve Zone</span><span class="dv">${isBlind ? "BLIND" : "SHARP"}</span></div>
+      <div class="detail-row"><span class="dl">Current Speed</span><span class="dv">${v.speed_kmh} km/h</span></div>
+      <div class="detail-row"><span class="dl">Recommended</span><span class="dv">${recommendedSpeed} km/h</span></div>
+      <div class="detail-row"><span class="dl">Curve Stabilization</span><span class="dv pill pill-ok">ACTIVE</span></div>
+      ${hazard ? `
+        <div class="curve-hazard">
+          HAZARD DETECTED — ${risk.level} (${risk.other_id}, ${risk.relation || ""})
+          ${sawV2V ? `<br>V2V: VEHICLE AHEAD` : ""}
+        </div>` : ""}
+    </div>`;
+}
+
+function renderSelection(state) {
+  if (!state) return;
+  const title = document.getElementById("detail-title");
+  const detail = document.getElementById("vehicle-detail");
+  const sensorPanel = document.getElementById("sensor-panel");
+  const riskCard = document.getElementById("risk-card");
+  const chain = document.getElementById("v2x-chain");
+
+  if (!selectedId || !state.vehicles[selectedId]) {
+    title.textContent = "Vehicle Detail — select a truck";
+    detail.innerHTML = '<div class="label">Click any truck on the map, or a fleet-status row.</div>';
+    sensorPanel.innerHTML = '<div class="label">No vehicle selected.</div>';
+    riskCard.innerHTML = '<div class="label">No vehicle selected.</div>';
+    chain.innerHTML = '<div class="label">No vehicle selected.</div>';
+    return;
+  }
+
+  const v = state.vehicles[selectedId];
+  const pos = state.positioning[selectedId] || {};
+  const sensors = state.sensors[selectedId] || {};
+  const risk = state.risk[selectedId] || {};
+  const fusion = state.fusion[selectedId] || {};
+  const v2i = state.v2i[selectedId] || {};
+  const obu = state.obu[selectedId] || {};
+  const edge = state.edge_compute[selectedId] || {};
+  const c = v2cLookup(state, selectedId);
+  const status = v.stalled ? "BREAKDOWN" : v.phase.replace("_", " ");
+  const dr = pos.mode === "DEAD_RECKONING";
+
+  title.textContent = `Vehicle Detail — ${selectedId}`;
+  detail.innerHTML =
+    curveAdvisoryHtml(v, state.recommended_speed[selectedId], risk, fusion) +
+    row("Status", status) +
+    row("Speed", `${v.speed_kmh} km/h`) +
+    row("Heading", `${v.heading_deg}°`) +
+    row("Bench", v.bench) +
+    row("Elevation", `${v.elevation_m} m`) +
+    row("Destination", v.destination) +
+    row("Radar Range", sensors.radar && sensors.radar.detected ? `${sensors.radar.distance_m} m` : "no object") +
+    row("Thermal Angle", sensors.thermal && sensors.thermal.detected ? `${sensors.thermal.centroid_angle_deg}°` : "no heat source") +
+    row("RTK-GNSS", `<span class="pill ${pos.rtk_status === "ACTIVE" ? "pill-ok" : "pill-warn"}">${pos.rtk_status || "--"}</span>`) +
+    row("Positioning", `<span class="pill ${dr ? "pill-warn" : "pill-ok"}">${dr ? "DEAD RECKONING" : "RTK-GNSS"}</span>`) +
+    row("IMU", `<span class="pill ${sensors.imu && sensors.imu.status === "ACTIVE" ? "pill-ok" : "pill-warn"}">${sensors.imu ? sensors.imu.status : "--"}</span>`) +
+    row("Wheel Odometry", `<span class="pill pill-ok">${sensors.wheel_speed ? sensors.wheel_speed.status : "--"}</span>`) +
+    row("V2X OBU", `<span class="pill ${obu.status === "CONNECTED" ? "pill-ok" : "pill-warn"}">${obu.status || "--"}</span>`) +
+    row("Raspberry Pi 5", `<span class="pill ${edge.status === "ACTIVE" ? "pill-ok" : "pill-warn"}">${edge.status || "--"}</span>`);
+
+  const dot = (ok) => `<span class="pill ${ok ? "pill-ok" : "pill-warn"}">● ${ok ? "ACTIVE" : "INACTIVE"}</span>`;
+
+  sensorPanel.innerHTML = `
+    <div class="onboard-card">
+      <div class="onboard-header">${selectedId} ONBOARD SYSTEM</div>
+
+      <div class="onboard-row">
+        <span>77GHz RADAR</span>
+        <span class="${sensors.radar && sensors.radar.detected ? "ok" : "muted"}">${sensors.radar && sensors.radar.detected ? "ACTIVE" : "NO OBJECT"}</span>
+      </div>
+      ${sensors.radar && sensors.radar.detected ? `<div class="onboard-sub">Range: ${sensors.radar.distance_m} m &nbsp; Closing: ${sensors.radar.relative_speed_mps} m/s</div>` : ""}
+
+      <div class="onboard-row">
+        <span>LWIR THERMAL</span>
+        <span class="${sensors.thermal && sensors.thermal.detected ? "ok" : "muted"}">${sensors.thermal && sensors.thermal.detected ? "ACTIVE" : "NO OBJECT"}</span>
+      </div>
+      ${sensors.thermal && sensors.thermal.detected ? `<div class="onboard-sub">Centroid: ${sensors.thermal.centroid_angle_deg}° (${sensors.thermal.direction}) &nbsp; Confidence: ${sensors.thermal.confidence}%</div>` : ""}
+
+      <div class="onboard-row">
+        <span>RTK-GNSS</span>
+        <span class="${pos.rtk_status === "ACTIVE" ? "ok" : "warn"}">${pos.rtk_status || "--"}</span>
+      </div>
+      ${pos.rtk_status === "ACTIVE" ? `<div class="onboard-sub">X: ${sensors.rtk.x}, Y: ${sensors.rtk.y} &nbsp; Accuracy: ${sensors.rtk.accuracy_cm} cm</div>` : ""}
+
+      <div class="onboard-row">
+        <span>MEMS IMU</span>
+        <span class="${sensors.imu.status === "ACTIVE" ? "ok" : "warn"}">${sensors.imu.status} &nbsp; ${sensors.imu.heading_deg}°</span>
+      </div>
+      <div class="onboard-sub">Yaw rate: ${sensors.imu.yaw_rate_deg_s}°/s &nbsp; Accel: ${sensors.imu.acceleration_mps2} m/s² &nbsp; ${sensors.imu.orientation} &nbsp; ${sensors.imu.motion_state}</div>
+
+      <div class="onboard-row">
+        <span>WHEEL ODOMETRY</span>
+        <span class="ok">ACTIVE &nbsp; ${sensors.wheel_speed.speed_kmh} km/h</span>
+      </div>
+      <div class="onboard-sub">Total: ${sensors.wheel_speed.odometry_m} m &nbsp; ${sensors.wheel_speed.travel_direction}${dr ? ` &nbsp; Since GNSS loss: ${pos.distance_since_loss_m} m` : ""}</div>
+
+      <div class="onboard-row">
+        <span>V2X OBU</span>
+        <span class="${obu.status === "CONNECTED" ? "ok" : "warn"}">${obu.status}</span>
+      </div>
+
+      <div class="onboard-row">
+        <span>RASPBERRY PI 5</span>
+        <span class="${edge.status === "ACTIVE" ? "ok" : "warn"}">${edge.status} &nbsp; ${edge.edge_processing}</span>
+      </div>
+      <div class="onboard-sub">Inputs: ${edge.sensor_inputs_active}/${edge.sensor_inputs_total} &nbsp; Load: ${edge.processing_load_pct}% (${edge.processing_level})</div>
+
+      <div class="onboard-divider"></div>
+
+      <div class="onboard-row">
+        <span>POSITIONING</span>
+        <span class="${dr ? "warn" : "ok"}">${dr ? "DEAD RECKONING" : "RTK-GNSS"}</span>
+      </div>
+      ${dr ? `<div class="onboard-sub">Source: IMU + WHEEL ODOMETRY &nbsp; Drift: ${pos.drift_m} m</div>` : `<div class="onboard-sub">Source: RTK-GNSS + IMU + WHEEL ODOMETRY</div>`}
+
+      <div class="onboard-row"><span>V2V</span>${dot(obu.v2v === "ACTIVE")}</div>
+      <div class="onboard-row"><span>V2I</span>${dot(obu.v2i === "ACTIVE")}</div>
+      <div class="onboard-row"><span>V2C</span>${dot(obu.v2c === "ACTIVE")}</div>
+    </div>
+  `;
+
+  if (risk.other_id) {
+    const ttcText = risk.ttc_s !== null ? `${risk.ttc_s} s` : "not closing";
+    riskCard.innerHTML = `
+      <div class="fusion-card">
+        <b>${selectedId} ↔ ${risk.other_id}</b> &nbsp; <span class="badge ${risk.level}">${risk.level}</span>
+        <div>Gap: ${risk.gap_m} m &nbsp; TTC: ${ttcText} &nbsp; ${risk.relation || ""}</div>
+      </div>`;
+  } else {
+    riskCard.innerHTML = '<div class="label">No other vehicle within sensor range.</div>';
+  }
+
+  const v2vPartners = (state.v2v_messages || [])
+    .filter((m) => m.sender === selectedId || m.receiver === selectedId)
+    .map((m) => (m.sender === selectedId ? m.receiver : m.sender));
+  chain.innerHTML = `
+    <div class="chain-row"><span class="chain-label">V2V</span><span>${v2vPartners.length ? "↔ " + [...new Set(v2vPartners)].join(", ") : "no vehicles in range"}</span></div>
+    <div class="chain-row"><span class="chain-label">V2I</span><span>${v2i.connected ? `↔ ${v2i.node.name} (${v2i.gap_m} m)` : "not connected"}</span></div>
+    <div class="chain-row"><span class="chain-label">V2C</span><span>${c.v2x_status === "CONNECTED" ? "↔ Control Centre" : "disconnected"}</span></div>
+    ${(obu.log || []).map((line) => `<div class="chain-row obu-log">${line}</div>`).join("")}
+  `;
+}
+
+document.getElementById("fog-select").addEventListener("change", (e) => fetch(`/api/fog/${e.target.value}`, { method: "POST" }));
 
 let autoOn = false;
 document.getElementById("fog-auto-btn").addEventListener("click", () => {
@@ -448,55 +319,48 @@ let demoActive = false;
 document.getElementById("demo-btn").addEventListener("click", () => {
   demoActive = !demoActive;
   fetch(`/api/demo/${demoActive ? "start" : "stop"}`, { method: "POST" });
-  if (demoActive) {
-    startDemoSequence();
-    document.getElementById("demo-btn").textContent = "■ STOP DEMO";
-    document.getElementById("demo-btn").classList.add("active");
-  } else {
-    stopDemoSequence();
-    document.getElementById("demo-btn").textContent = "▶ DEMO MODE";
-    document.getElementById("demo-btn").classList.remove("active");
-    document.getElementById("fog-forecast-panel").style.display = "none";
-  }
 });
 
-const demoResetBtn = document.getElementById("demo-reset-btn");
-if (demoResetBtn) {
-  demoResetBtn.addEventListener("click", () => {
-    fetch(`/api/demo/reset`, { method: "POST" });
-    _actionApplied = false;
-    _demoRunning   = false;
-    clearTimeout(_demoTimer);
-    document.getElementById("fog-forecast-panel").style.display = "none";
-    if (demoActive) startDemoSequence();
-  });
-}
-
-document.getElementById("export-logs-btn")?.addEventListener("click", () => {
-  window.open("/api/export-logs", "_blank");
+let paused = false;
+document.getElementById("pause-btn").addEventListener("click", () => {
+  paused = !paused;
+  fetch(`/api/pause/${paused}`, { method: "POST" });
 });
 
-const tickSlider    = document.getElementById("tick-rate-slider");
-const tickValueSpan = document.getElementById("tick-rate-value");
-if (tickSlider) {
-  const savedRate = localStorage.getItem("tickRate");
-  if (savedRate) tickSlider.value = savedRate;
-  const sendRate = rate => {
-    fetch(`/api/simulation/tick_rate?rate=${rate}`, { method: "POST" })
-      .then(() => {
-        tickValueSpan.textContent = `${rate} s/tick`;
-        localStorage.setItem("tickRate", rate);
-      }).catch(console.error);
-  };
-  tickSlider.addEventListener("input", e => sendRate(parseFloat(e.target.value)));
-  sendRate(parseFloat(tickSlider.value));
-}
+document.getElementById("reset-btn").addEventListener("click", () => {
+  fetch("/api/reset", { method: "POST" });
+  selectedId = null;
+});
+
+document.getElementById("sim-speed-select").addEventListener("change", (e) => {
+  fetch(`/api/sim-speed/${e.target.value}`, { method: "POST" });
+});
+
+let gpsDenied = false;
+document.getElementById("gps-denied-btn").addEventListener("click", () => {
+  gpsDenied = !gpsDenied;
+  fetch(`/api/gps-denied/${gpsDenied}`, { method: "POST" });
+});
+
+let v2xOn = true;
+document.getElementById("v2x-btn").addEventListener("click", () => {
+  v2xOn = !v2xOn;
+  fetch(`/api/v2x/${v2xOn}`, { method: "POST" });
+});
+
+document.getElementById("links-btn").addEventListener("click", (e) => {
+  showLinks = !showLinks;
+  e.target.textContent = `Links: ${showLinks ? "ON" : "OFF"}`;
+});
 
 connectFognetSocket(
   render,
-  () => { connDot.classList.add("connected");    connText.textContent = "connected"; },
-  () => { connDot.classList.remove("connected"); connText.textContent = "reconnecting..."; }
+  () => {
+    connDot.classList.add("connected");
+    connText.textContent = "connected";
+  },
+  () => {
+    connDot.classList.remove("connected");
+    connText.textContent = "reconnecting...";
+  }
 );
-
-// Draw gauge with initial values
-drawVisGauge(200, "CLEAR");

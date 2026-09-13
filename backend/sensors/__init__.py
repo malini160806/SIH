@@ -1,13 +1,15 @@
 from .base import SensorInterface
 from .radar import MMWaveRadarSim
 from .thermal import ThermalCameraSim
-from .gps import RTKGPSSim
+from .rtk_gnss import RTKGnssSim
 from .imu import IMUSim
+from .wheel_speed import WheelSpeedSim
 
 __all__ = [
     "SensorInterface",
     "MMWaveRadarSim",
     "ThermalCameraSim",
-    "RTKGPSSim",
+    "RTKGnssSim",
     "IMUSim",
+    "WheelSpeedSim",
 ]
