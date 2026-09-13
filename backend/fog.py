@@ -25,6 +25,12 @@ class FogController:
         self.visibility_m: float = self.levels["CLEAR"]
         self.elapsed_minutes = 0.0
 
+    def get_current_visibility(self) -> float:
+        """Return the current global visibility distance in metres — a
+        simple accessor for callers that need only the numeric value
+        without the full status dict from state()."""
+        return self.visibility_m
+
     def set_level(self, level: str):
         level = level.upper()
         if level not in self.levels:

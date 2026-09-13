@@ -168,8 +168,13 @@ async def set_comm(vehicle_id: str, enabled: bool):
 
 
 @app.get("/api/events")
-async def get_events(limit: int = 50):
-    return db.fetch_recent_events(limit)
+async def get_events(limit: int = 50, offset: int = 0):
+    return db.fetch_recent_events(limit, offset)
+
+
+@app.get("/api/telemetry")
+async def get_telemetry(limit: int = 50, offset: int = 0):
+    return db.fetch_recent_telemetry(limit, offset)
 
 
 # ---------------------------------------------------------------- WebSocket

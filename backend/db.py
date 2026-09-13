@@ -80,10 +80,19 @@ def log_event(event: dict):
     conn.close()
 
 
-def fetch_recent_events(limit: int = 50) -> list[dict]:
+def fetch_recent_events(limit: int = 50, offset: int = 0) -> list[dict]:
     conn = get_connection()
     rows = conn.execute(
-        "SELECT * FROM events ORDER BY timestamp DESC LIMIT ?", (limit,)
+        "SELECT * FROM events ORDER BY timestamp DESC LIMIT ? OFFSET ?", (limit, offset)
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def fetch_recent_telemetry(limit: int = 50, offset: int = 0) -> list[dict]:
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT * FROM telemetry ORDER BY timestamp DESC LIMIT ? OFFSET ?", (limit, offset)
     ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
