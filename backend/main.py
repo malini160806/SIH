@@ -10,11 +10,13 @@ rather than repeated on every tick, to keep the per-tick payload small.
 from __future__ import annotations
 
 import asyncio
+import csv
+import io
 import json
 import os
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from . import db
@@ -175,6 +177,33 @@ async def get_events(limit: int = 50, offset: int = 0):
 @app.get("/api/telemetry")
 async def get_telemetry(limit: int = 50, offset: int = 0):
     return db.fetch_recent_telemetry(limit, offset)
+
+
+@app.get("/api/export-logs")
+async def export_logs(limit: int = 50, offset: int = 0):
+    """CSV export: telemetry rows, a blank separator line, then event rows."""
+    telemetry = db.fetch_recent_telemetry(limit, offset)
+    events = db.fetch_recent_events(limit, offset)
+
+    buf = io.StringIO()
+    if telemetry:
+        writer = csv.DictWriter(buf, fieldnames=list(telemetry[0].keys()))
+        writer.writeheader()
+        writer.writerows(telemetry)
+    buf.write("\n")
+    if events:
+        writer = csv.DictWriter(buf, fieldnames=list(events[0].keys()))
+        writer.writeheader()
+        writer.writerows(events)
+
+    return Response(content=buf.getvalue(), media_type="text/csv")
+
+
+@app.post("/api/simulation/tick_rate")
+async def set_tick_rate(rate: float):
+    """Directly override the simulation tick interval (seconds)."""
+    engine.dt = rate
+    return {"ok": True, "tick_rate": engine.dt}
 
 
 # ---------------------------------------------------------------- WebSocket
