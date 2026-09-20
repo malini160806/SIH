@@ -13,29 +13,163 @@
     <div class="subtitle">Predictive &amp; Cooperative Fog Intelligence — Open-Pit Haulage Safety</div>
   </div>
   <div class="controls">
-    <button id="pause-btn">⏸ Pause</button>
-    <button id="reset-btn">⟲ Reset</button>
-    <button id="demo-btn" class="demo-btn">▶ DEMO MODE</button>
-    <select id="fog-select">
-      <option value="CLEAR">Fog: Clear</option>
-      <option value="LIGHT">Fog: Light</option>
-      <option value="MEDIUM">Fog: Medium</option>
-      <option value="HEAVY">Fog: Heavy</option>
-      <option value="EXTREME">Fog: Extreme</option>
-    </select>
-    <button id="fog-auto-btn">Auto-Fog: OFF</button>
-    <select id="sim-speed-select">
-      <option value="0.5">Speed: 0.5x</option>
-      <option value="1" selected>Speed: 1x</option>
-      <option value="2">Speed: 2x</option>
-      <option value="4">Speed: 4x</option>
-    </select>
-    <button id="gps-denied-btn">GPS-Denied: OFF</button>
-    <button id="v2x-btn">V2X: ON</button>
-    <button id="links-btn">Links: ON</button>
-    <a href="/driver" target="_blank"><button>🚚 Driver View</button></a>
+    <div class="ctrl-group">
+      <span class="ctrl-group-label">Simulation</span>
+      <div class="ctrl-group-row">
+        <button id="pause-btn" data-tip="Purpose: Pause or resume the simulation clock.&#10;Why: Freeze the scene to inspect a moment in detail.&#10;How: Toggles the global simulation tick on the backend.">⏸ Pause</button>
+        <button id="reset-btn" data-tip="Purpose: Restart the simulation from its initial state.&#10;Why: Quickly return to a clean baseline for a new run.&#10;How: Reinitializes vehicle positions, fog levels, and events.">⟲ Reset</button>
+        <select id="sim-speed-select" data-tip="Purpose: Change how fast simulated time passes.&#10;Why: Speed up to see long-term patterns, slow down to study detail.&#10;How: Scales the interval between simulation ticks.">
+          <option value="0.5">Speed: 0.5x</option>
+          <option value="1" selected>Speed: 1x</option>
+          <option value="2">Speed: 2x</option>
+          <option value="4">Speed: 4x</option>
+        </select>
+        <button id="demo-btn" class="demo-btn" data-tip="Purpose: Run a scripted end-to-end demo scenario.&#10;Why: Showcase the system's capabilities automatically.&#10;How: Steps through predefined events with on-screen captions.">▶ DEMO MODE</button>
+      </div>
+    </div>
+
+    <div class="ctrl-group">
+      <span class="ctrl-group-label">Fog</span>
+      <div class="ctrl-group-row">
+        <select id="fog-select" data-tip="Purpose: Manually set the global fog/visibility level.&#10;Why: Test how the system reacts to different visibility conditions.&#10;How: Overrides the visibility value used by every fog zone.">
+          <option value="CLEAR">Fog: Clear</option>
+          <option value="LIGHT">Fog: Light</option>
+          <option value="MEDIUM">Fog: Medium</option>
+          <option value="HEAVY">Fog: Heavy</option>
+          <option value="EXTREME">Fog: Extreme</option>
+        </select>
+        <button id="fog-auto-btn" data-tip="Purpose: Let fog levels change automatically over time.&#10;Why: Simulates realistic, shifting weather without manual input.&#10;How: Cycles the visibility value on a timer when enabled.">Auto-Fog: OFF</button>
+      </div>
+    </div>
+
+    <div class="ctrl-group">
+      <span class="ctrl-group-label">Network</span>
+      <div class="ctrl-group-row">
+        <button id="gps-denied-btn" data-tip="Purpose: Simulate loss of GPS signal for all vehicles.&#10;Why: Demonstrates dead-reckoning fallback in GPS-denied pits.&#10;How: Forces positioning to use IMU + wheel odometry instead of RTK-GNSS.">GPS-Denied: OFF</button>
+        <button id="v2x-btn" data-tip="Purpose: Toggle the V2X communication network.&#10;Why: Shows how vehicles behave without V2V/V2I/V2C connectivity.&#10;How: Disables message exchange between vehicles, infrastructure, and control centre.">V2X: ON</button>
+        <button id="links-btn" data-tip="Purpose: Show or hide communication link lines on the map.&#10;Why: Reduces visual clutter when you only want to see vehicles.&#10;How: Toggles rendering of the connection overlay on the digital twin canvas.">Links: ON</button>
+      </div>
+    </div>
+
+    <div class="ctrl-group">
+      <span class="ctrl-group-label">Views</span>
+      <div class="ctrl-group-row">
+        <a href="/driver" target="_blank"><button data-tip="Purpose: Open the driver-facing display in a new tab.&#10;Why: See exactly what the truck driver sees and hears.&#10;How: Loads /driver with live telemetry for the selected vehicle.">🚚 Driver View</button></a>
+      </div>
+    </div>
   </div>
 </header>
+
+<details class="panel guide-panel" id="control-guide" open>
+  <summary>ℹ Control Guide <span class="hint">(what each control does — click to collapse)</span></summary>
+  <div class="guide-grid">
+    <div class="guide-section">
+      <div class="guide-section-title">Simulation</div>
+
+      <div class="guide-item">
+        <div class="guide-name">⏸ Pause / Resume</div>
+        <dl class="guide-desc">
+          <dt>Purpose</dt><dd>Pause or resume the simulation clock.</dd>
+          <dt>Why</dt><dd>Freeze the scene to inspect a moment in detail.</dd>
+          <dt>How</dt><dd>Toggles the global simulation tick on the backend.</dd>
+        </dl>
+      </div>
+
+      <div class="guide-item">
+        <div class="guide-name">⟲ Reset</div>
+        <dl class="guide-desc">
+          <dt>Purpose</dt><dd>Restart the simulation from its initial state.</dd>
+          <dt>Why</dt><dd>Quickly return to a clean baseline for a new run.</dd>
+          <dt>How</dt><dd>Reinitializes vehicle positions, fog levels, and events.</dd>
+        </dl>
+      </div>
+
+      <div class="guide-item">
+        <div class="guide-name">Speed (0.5x – 4x)</div>
+        <dl class="guide-desc">
+          <dt>Purpose</dt><dd>Change how fast simulated time passes.</dd>
+          <dt>Why</dt><dd>Speed up to see long-term patterns, slow down to study detail.</dd>
+          <dt>How</dt><dd>Scales the interval between simulation ticks.</dd>
+        </dl>
+      </div>
+
+      <div class="guide-item">
+        <div class="guide-name">▶ Demo Mode</div>
+        <dl class="guide-desc">
+          <dt>Purpose</dt><dd>Run a scripted end-to-end demo scenario.</dd>
+          <dt>Why</dt><dd>Showcase the system's capabilities automatically.</dd>
+          <dt>How</dt><dd>Steps through predefined events with on-screen captions.</dd>
+        </dl>
+      </div>
+    </div>
+
+    <div class="guide-section">
+      <div class="guide-section-title">Fog</div>
+
+      <div class="guide-item">
+        <div class="guide-name">Fog: Clear / Light / Medium / Heavy / Extreme</div>
+        <dl class="guide-desc">
+          <dt>Purpose</dt><dd>Manually set the global fog/visibility level.</dd>
+          <dt>Why</dt><dd>Test how the system reacts to different visibility conditions.</dd>
+          <dt>How</dt><dd>Overrides the visibility value used by every fog zone.</dd>
+        </dl>
+      </div>
+
+      <div class="guide-item">
+        <div class="guide-name">Auto-Fog</div>
+        <dl class="guide-desc">
+          <dt>Purpose</dt><dd>Let fog levels change automatically over time.</dd>
+          <dt>Why</dt><dd>Simulates realistic, shifting weather without manual input.</dd>
+          <dt>How</dt><dd>Cycles the visibility value on a timer when enabled.</dd>
+        </dl>
+      </div>
+    </div>
+
+    <div class="guide-section">
+      <div class="guide-section-title">Network</div>
+
+      <div class="guide-item">
+        <div class="guide-name">GPS-Denied</div>
+        <dl class="guide-desc">
+          <dt>Purpose</dt><dd>Simulate loss of GPS signal for all vehicles.</dd>
+          <dt>Why</dt><dd>Demonstrates dead-reckoning fallback in GPS-denied pits.</dd>
+          <dt>How</dt><dd>Forces positioning to use IMU + wheel odometry instead of RTK-GNSS.</dd>
+        </dl>
+      </div>
+
+      <div class="guide-item">
+        <div class="guide-name">V2X</div>
+        <dl class="guide-desc">
+          <dt>Purpose</dt><dd>Toggle the V2X communication network.</dd>
+          <dt>Why</dt><dd>Shows how vehicles behave without V2V/V2I/V2C connectivity.</dd>
+          <dt>How</dt><dd>Disables message exchange between vehicles, infrastructure, and control centre.</dd>
+        </dl>
+      </div>
+
+      <div class="guide-item">
+        <div class="guide-name">Links</div>
+        <dl class="guide-desc">
+          <dt>Purpose</dt><dd>Show or hide communication link lines on the map.</dd>
+          <dt>Why</dt><dd>Reduces visual clutter when you only want to see vehicles.</dd>
+          <dt>How</dt><dd>Toggles rendering of the connection overlay on the digital twin canvas.</dd>
+        </dl>
+      </div>
+    </div>
+
+    <div class="guide-section">
+      <div class="guide-section-title">Views</div>
+
+      <div class="guide-item">
+        <div class="guide-name">🚚 Driver View</div>
+        <dl class="guide-desc">
+          <dt>Purpose</dt><dd>Open the driver-facing display in a new tab.</dd>
+          <dt>Why</dt><dd>See exactly what the truck driver sees and hears.</dd>
+          <dt>How</dt><dd>Loads /driver with live telemetry for the selected vehicle.</dd>
+        </dl>
+      </div>
+    </div>
+  </div>
+</details>
 
 <main class="layout">
   <section>

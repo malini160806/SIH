@@ -8,7 +8,7 @@
 </head>
 <body class="driver-body status-GREEN" id="driver-body">
   <div class="driver-select">
-    <select id="vehicle-select">
+    <select id="vehicle-select" data-tip="Purpose: Choose which dumper truck's driver view to display.&#10;Why: Switch between vehicles to compare their live status.&#10;How: Reloads live telemetry from the simulation for the selected vehicle ID.">
       <option value="DUMPER-01">DUMPER-01</option>
       <option value="DUMPER-02">DUMPER-02</option>
       <option value="DUMPER-03">DUMPER-03</option>
@@ -69,6 +69,18 @@
       <span id="driver-fog-status">Fog: --</span>
       <span id="driver-gnss">GNSS: --</span>
     </div>
+
+    <details class="driver-guide">
+      <summary>ℹ What am I seeing?</summary>
+      <dl class="guide-desc driver-guide-desc">
+        <dt>Vehicle selector</dt><dd>Purpose: pick which dumper's driver view to show. Why: compare vehicles. How: reloads live telemetry for the chosen vehicle ID.</dd>
+        <dt>Status banner</dt><dd>Purpose: overall hazard level (SAFE / CAUTION / HIGH RISK / CRITICAL). Why: tells the driver at a glance whether to act. How: combines fog visibility, distance ahead, and time-to-collision.</dd>
+        <dt>Visibility meter</dt><dd>Purpose: shows current sight distance in metres. Why: low visibility means lower safe speed. How: read from the fog sensor for the truck's current zone.</dd>
+        <dt>Speed gauge</dt><dd>Purpose: compares current vs. recommended speed. Why: warns when driving faster than conditions allow. How: recommended speed is computed from visibility and following distance.</dd>
+        <dt>Distance / TTC tiles</dt><dd>Purpose: distance to the vehicle ahead and time-to-collision. Why: the earliest warning of a closing hazard. How: fused from radar, thermal, and V2V position reports.</dd>
+        <dt>V2V messages</dt><dd>Purpose: alerts shared directly by nearby trucks. Why: works even without GPS or control-centre connectivity. How: received over the truck-to-truck (V2V) radio link.</dd>
+      </dl>
+    </details>
   </div>
 
 <script src="/static/js/ws.js"></script>
