@@ -9,6 +9,16 @@ let latestState = null;
 let selectedId = null;
 let showLinks = true;
 
+const dumperSelect = document.getElementById("dumper-select");
+
+function selectVehicle(id) {
+  selectedId = id || null;
+  dumperSelect.value = selectedId || "";
+  renderSelection(latestState);
+}
+
+dumperSelect.addEventListener("change", (e) => selectVehicle(e.target.value));
+
 fetch("/api/road")
   .then((r) => r.json())
   .then((road) => (cachedRoad = road));
@@ -44,10 +54,7 @@ canvas.addEventListener("click", (evt) => {
       best = v.id;
     }
   });
-  if (best) {
-    selectedId = best;
-    renderSelection(latestState);
-  }
+  if (best) selectVehicle(best);
 });
 
 function render(state) {
@@ -91,10 +98,7 @@ function renderFleetTable(state) {
       <td><span class="pill ${c.v2x_status === "CONNECTED" ? "pill-ok" : "pill-warn"}">${c.v2x_status || "--"}</span></td>
       <td><span class="badge ${v.hazard_status}">${v.hazard_status}</span></td>
     `;
-    tr.addEventListener("click", () => {
-      selectedId = v.id;
-      renderSelection(latestState);
-    });
+    tr.addEventListener("click", () => selectVehicle(v.id));
     tbody.appendChild(tr);
   });
 }
@@ -329,7 +333,7 @@ document.getElementById("pause-btn").addEventListener("click", () => {
 
 document.getElementById("reset-btn").addEventListener("click", () => {
   fetch("/api/reset", { method: "POST" });
-  selectedId = null;
+  selectVehicle(null);
 });
 
 document.getElementById("sim-speed-select").addEventListener("change", (e) => {

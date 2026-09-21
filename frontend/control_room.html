@@ -52,6 +52,20 @@
     </div>
 
     <div class="ctrl-group">
+      <span class="ctrl-group-label">Selection</span>
+      <div class="ctrl-group-row">
+        <select id="dumper-select" data-tip="Purpose: Choose which dumper truck to inspect.&#10;Why: Quickly focus a specific vehicle without hunting for it on the map.&#10;How: Highlights the chosen truck on the digital twin and loads its detail panels.">
+          <option value="">Select Dumper…</option>
+          <option value="DUMPER-01">DUMPER-01</option>
+          <option value="DUMPER-02">DUMPER-02</option>
+          <option value="DUMPER-03">DUMPER-03</option>
+          <option value="DUMPER-04">DUMPER-04</option>
+          <option value="DUMPER-05">DUMPER-05</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="ctrl-group">
       <span class="ctrl-group-label">Views</span>
       <div class="ctrl-group-row">
         <a href="/driver" target="_blank"><button data-tip="Purpose: Open the driver-facing display in a new tab.&#10;Why: See exactly what the truck driver sees and hears.&#10;How: Loads /driver with live telemetry for the selected vehicle.">🚚 Driver View</button></a>
@@ -152,6 +166,19 @@
           <dt>Purpose</dt><dd>Show or hide communication link lines on the map.</dd>
           <dt>Why</dt><dd>Reduces visual clutter when you only want to see vehicles.</dd>
           <dt>How</dt><dd>Toggles rendering of the connection overlay on the digital twin canvas.</dd>
+        </dl>
+      </div>
+    </div>
+
+    <div class="guide-section">
+      <div class="guide-section-title">Selection</div>
+
+      <div class="guide-item">
+        <div class="guide-name">Select Dumper</div>
+        <dl class="guide-desc">
+          <dt>Purpose</dt><dd>Choose which dumper truck to inspect.</dd>
+          <dt>Why</dt><dd>Quickly focus a specific vehicle without hunting for it on the map.</dd>
+          <dt>How</dt><dd>Highlights the chosen truck on the digital twin and loads its detail panels.</dd>
         </dl>
       </div>
     </div>
